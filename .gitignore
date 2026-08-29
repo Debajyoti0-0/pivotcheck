@@ -1,0 +1,25 @@
+# Virtual environments
+.venv/
+venv/
+
+# Byte-compiled / packaging artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Project-local pytest temp fallback (see conftest.py)
+.pytest_tmp/
+
+# Coverage
+.coverage
+htmlcov/
+
+# AutoClaw KDream data
+.autoclaw/
