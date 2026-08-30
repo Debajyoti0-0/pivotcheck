@@ -7,6 +7,10 @@
 
 **Passive network discovery and pivot path validation for authorized security assessments.**
 
+<p align="center">
+<img src="Image.png" alt="PivotCheck Logo">
+</p>
+
 PivotCheck answers the question a foothold does *not*: **"what can I actually reach from here, what changed since I last looked, and what evidence-backed investigation should I perform next?"** It normalizes heterogeneous host network state (`ip`, `route`, `arp`/`neigh`, `ss`, `resolv.conf`) into one coherent model, classifies each reachable network with an explicit confidence level, correlates transit evidence, and explains every conclusion — instead of leaving you to stitch that picture together by hand.
 
 > ⚠️ **Authorized use only.** PivotCheck is built for defensive review and sanctioned penetration testing. Only run it against systems and networks you are explicitly authorized to assess.
