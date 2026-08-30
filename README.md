@@ -48,7 +48,7 @@ next. It does not scan, and it does not claim reachability without evidence.
 ## Installation
 
 ```bash
-python -m pip install git+https://github.com/Debajyoti0-0/pivotcheck.git@v1.0.0
+pip install pivotcheck
 ```
 
 Verify:
