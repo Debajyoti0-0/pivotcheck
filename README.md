@@ -1,55 +1,89 @@
 # PivotCheck
 
+[![CI](https://github.com/Debajyoti0-0/pivotcheck/actions/workflows/ci.yml/badge.svg)](https://github.com/Debajyoti0-0/pivotcheck/actions/workflows/ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)
+![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)
+
 **Passive network discovery and pivot path validation for authorized security assessments.**
 
 PivotCheck answers the question a foothold does *not*: **"what can I actually reach from here, what changed since I last looked, and what evidence-backed investigation should I perform next?"** It normalizes heterogeneous host network state (`ip`, `route`, `arp`/`neigh`, `ss`, `resolv.conf`) into one coherent model, classifies each reachable network with an explicit confidence level, correlates transit evidence, and explains every conclusion — instead of leaving you to stitch that picture together by hand.
 
 > ⚠️ **Authorized use only.** PivotCheck is built for defensive review and sanctioned penetration testing. Only run it against systems and networks you are explicitly authorized to assess.
 
-- **Repository:** <https://github.com/Debajyoti0-0/pivotcheck>
-- **License:** GPL-3.0-only
-- **Status:** v1.0.0 — stable release
-- **Primary platform:** Linux for discovery; checks and baseline management are cross-platform
+| | |
+|---|---|
+| **Repository** | <https://github.com/Debajyoti0-0/pivotcheck> |
+| **License** | GPL-3.0-only |
+| **Status** | v1.0.0 — stable release |
+| **Platform** | Linux for discovery; checks and baseline management are cross-platform |
+| **Runtime dependencies** | Zero (Python standard library only) |
 
 ---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Why PivotCheck Exists](#why-pivotcheck-exists)
+- [Core Capabilities](#core-capabilities)
+- [Safety and Scope](#safety-and-scope)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Commands](#commands)
+- [Remote Collection (SSH)](#remote-collection-ssh)
+- [Architecture](#architecture)
+- [Evidence Model and Semantics](#evidence-model-and-semantics)
+- [Output Contracts](#output-contracts)
+- [Protocol Scope](#protocol-scope)
+- [Baselines and Comparison](#baselines-and-comparison)
+- [Operator Intelligence](#operator-intelligence)
+- [Security and Safety Guarantees](#security-and-safety-guarantees)
+- [Development and Testing](#development-and-testing)
+- [Contributing](#contributing)
+- [Security Reporting](#security-reporting)
+- [License](#license)
 
 ## Overview
 
 PivotCheck is **not** a network scanner, exploitation framework, or automatic pivot engine. It is a decision-support tool that reduces the manual reasoning gap between observing a host's network state and deciding what explicit pivot-path validation to perform next.
 
-The central epistemic rule, enforced throughout the architecture, tests, and output language:
+The central epistemic rule, enforced throughout the architecture, the tests, and the output language:
 
 ```text
 OBSERVED EVIDENCE ≠ INFERRED CONTEXT ≠ PRIORITY ≠ ACTIVE VALIDATION
 ```
 
-No presentation layer invents evidence, no recommendation becomes validation, and no inferred conclusion is presented as directly observed fact.
+No presentation layer invents evidence, no recommendation becomes validation, and no inferred conclusion is presented as directly observed fact. Every conclusion is traceable backward:
+
+```text
+recommendation → analysis rule → inference → observed evidence
+```
 
 ## Why PivotCheck Exists
 
 After gaining a foothold (or during a defensive review of one), an operator traditionally runs `ip route`, `arp -a`, `ss -tunap`, and `cat /etc/resolv.conf` manually and reasons about the results by hand. That reasoning is error-prone and, worse, tends to blur evidence ("a route exists") with conclusions ("therefore the network is reachable").
 
-PivotCheck exists to make that reasoning explicit, deterministic, and honest:
+PivotCheck makes that reasoning explicit, deterministic, and honest in five stages:
 
-1. **Collect** — normalize heterogeneous system state into one evidence model.
-2. **Infer** — deterministic topology and transit analysis, clearly labeled as inference.
-3. **Compare** — diff the current perspective against saved baselines.
-4. **Prioritize** — rank investigation candidates by supporting evidence, deterministically.
-5. **Validate** — only on explicit operator command, against one explicit target at a time.
-
-Every conclusion is traceable backward: recommendation → analysis rule → inference → observed evidence.
+| Stage | Command(s) | Question answered |
+|---|---|---|
+| **Collect** | `discover`, `map` | What is visible from this vantage point? |
+| **Infer** | `explain`, `gaps` | What does the evidence support — and what is missing? |
+| **Compare** | `baseline`, `compare` | What changed since the saved perspective? |
+| **Prioritize** | `next` | Which context deserves attention first? |
+| **Validate** | `check`, `proxy-check` | What happens on this one explicit target — chosen by you? |
 
 ## Core Capabilities
 
-- **Passive discovery** (`discover`, `map`) — interfaces, routes, neighbors, DNS, and sockets from `ip`, `ss`, and `resolv.conf`; no host sweeps, no ICMP, no traceroute.
+- **Passive discovery** — interfaces, routes, neighbors, DNS, and sockets from `ip`, `ss`, and `resolv.conf`; no host sweeps, no ICMP, no traceroute.
 - **Confidence-classified networks** — `HIGH` (directly connected + interface up), `MEDIUM` (explicit route via gateway), `LOW` (inferred — never presented as fact).
-- **Evidence gap analysis** (`gaps`) — six-state classification of what evidence exists and what is missing.
-- **Candidate explanation** (`explain`) — the full evidence → inference → priority chain for one network.
-- **Investigation ranking** (`next`) — one evidence-backed candidate, deterministically selected.
-- **Baselines and comparison** (`baseline`, `compare`) — versioned persistence and diff analysis with operator intelligence views.
-- **Explicit validation** (`check`, `proxy-check`) — single-target TCP and SOCKS5 CONNECT with precise result taxonomies.
+- **Evidence gap analysis** — six-state classification of what evidence exists and what is missing.
+- **Candidate explanation** — the full evidence → inference → priority chain for one network.
+- **Investigation ranking** — one evidence-backed candidate, deterministically selected.
+- **Baselines and comparison** — versioned persistence and diff analysis with operator intelligence views.
+- **Explicit validation** — single-target TCP and SOCKS5 CONNECT with precise result taxonomies.
 - **Remote vantage points** — discovery over SSH using your existing agent/keys, with strict host-key verification.
-- **Stable JSON** on every command, deterministic ordering, zero required runtime dependencies (Python standard library only).
+- **Stable JSON** on every command, deterministic ordering, ANSI-free.
 
 ## Safety and Scope
 
@@ -79,6 +113,8 @@ pip install -e ".[dev]"
 
 This installs a `pivotcheck` console script. `python -m pivotcheck` is equivalent. The optional `[socks]` extra (PySocks) is kept for future protocol work; `proxy-check` itself ships a stdlib-only SOCKS5 client.
 
+> **Note:** there is no `requirements.txt` by design. PivotCheck has zero runtime dependencies; development dependencies are declared once, in the `[dev]` extra of [`pyproject.toml`](pyproject.toml).
+
 ## Quick Start
 
 ```bash
@@ -103,6 +139,21 @@ pivotcheck check 10.50.1.10 --port 443
 # 7. Save a baseline, then compare later
 pivotcheck baseline create --name pre-pivot
 pivotcheck compare pre-pivot --recommend
+```
+
+Every command accepts `--json` for machine-readable output:
+
+```json
+{
+  "schema_version": "1.1",
+  "tool": "pivotcheck",
+  "version": "1.0.0",
+  "command": "next",
+  "timestamp": "2026-08-30T08:08:26.553003+00:00",
+  "candidate": { "...": "..." },
+  "suggested_action": { "command_template": "Choose an explicit target and port. Run: pivotcheck check <target> --port <port>" },
+  "limitations": ["Route and topology evidence do not prove active reachability."]
+}
 ```
 
 ## Commands
@@ -203,7 +254,7 @@ pivotcheck compare pre-pivot --json --output result.json --force
 
 The view flags (`--summary`, `--evidence`, `--recommend`, `--explain`) are mutually exclusive; filters (`--interface`, `--family`, `--changes-only`, `--minimum-confidence`) compose with any view. `--output` requires JSON format. See [`docs/comparison-semantics.md`](docs/comparison-semantics.md) and [`docs/operator-intelligence.md`](docs/operator-intelligence.md).
 
-## Remote collection (SSH)
+## Remote Collection (SSH)
 
 `discover`, `map`, and `baseline create` accept a remote vantage point. Authentication uses your existing SSH agent/keys/config; host keys are verified **strictly** by default.
 
@@ -336,7 +387,7 @@ All evidence belongs to exactly one vantage point — local or a single SSH host
 
 ### Human Output
 
-Human output is evidence-first, operationally concise, and consistent across commands: observed evidence, inferred context, priority, and validation results are visually separated. Color is auto-enabled on a TTY and changes presentation only — the semantic content is identical with `--no-color`.
+Human output is evidence-first, operationally concise, and consistent across commands: observed evidence, inferred context, priority, and validation results are visually separated. Color is auto-enabled on a TTY and changes presentation only — the semantic content is identical with `--no-color`. Output survives encoding-constrained streams (e.g., cp1252 file redirection) without crashing.
 
 ### JSON Output
 
@@ -354,7 +405,7 @@ Payloads identify their source: provider (`local`/`ssh`), vantage point, and gen
 
 Same input → same normalized result → same ordering → same semantic output. Ordering is priority, then confidence, then canonical network ordering, with stable lexical tie-breaks. JSON never depends on dictionary insertion accidents or collection timing.
 
-### Exit codes
+### Exit Codes
 
 **`discover` / `map`**
 
@@ -392,17 +443,17 @@ PivotCheck implements **two validation protocols**, both at the transport layer:
 | **TCP** | `check` | Explicit target + explicit ports, single connection attempt per address:port |
 | **SOCKS5 CONNECT** | `proxy-check` | Explicit proxy + explicit destination + explicit port, one three-stage transaction |
 
-### Explicitly deferred: UDP
+### Explicitly Deferred: UDP
 
 Connectionless semantics make UDP epistemically hazardous: no response ≠ unreachable, and a `TIMEOUT` would be even more ambiguous than TCP's. Doing this honestly would require distinct evidence states (`UDP_RESPONSE_OBSERVED`, `ICMP_*_OBSERVED`) and a strict ban on claiming "port open" from silence alone. It is deferred indefinitely — TCP + SOCKS5 CONNECT cover the pivot-validation need, and `nmap -sU` / `nc -u` exist for UDP.
 
-### Explicitly out of scope: application protocol validation
+### Explicitly Out of Scope: Application Protocol Validation
 
 `check` validates the network path and transport acceptance only. TCP 22 reachable ≠ SSH session; TCP 445 reachable ≠ SMB share access; TCP 3389 reachable ≠ RDP session. SSH, Telnet, HTTP CONNECT, SOCKS4/4a, UDP ASSOCIATE, BIND, SMB, WinRM, LDAP, RDP, and DNS are all deliberately rejected — application-layer protocols have fundamentally different evidence models and are better served by specialized tooling (`nmap -sV`, `impacket`, dedicated clients). PivotCheck answers *"Is the network path open and does the transport layer accept the connection?"* — never *"Does the service work correctly?"*
 
 There is deliberately no generic `ValidationTransport` plugin framework: each protocol adds a parser, state machine, and error taxonomy, and "just add one more protocol" is a scope-creep vector. `checks/tcp.py` and `checks/proxy.py` are two independent, focused engines whose semantics are intentionally different (direct vs. relayed).
 
-### Future protocol admission criteria
+### Future Protocol Admission Criteria
 
 A new protocol would be considered only if **all** of the following hold:
 
