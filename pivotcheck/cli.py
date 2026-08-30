@@ -530,7 +530,12 @@ def _add_output_args(sub_parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--format",
         choices=["text", "json"],
-        default="text",
+        # None (not "text") so that an explicit --format is always
+        # distinguishable from the default: argparse's mutual-exclusion
+        # check compares by identity against the default, and a shared
+        # interned "text" string would make conflict detection depend on
+        # the CPython version. main() normalizes None back to "text".
+        default=None,
         help="output format (default: text)",
     )
     group.add_argument(
@@ -1302,6 +1307,12 @@ def _run_explain(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Normalize the --format sentinel (see _add_output_args): no explicit
+    # --format means text. Done before any handler so downstream code sees
+    # the documented default regardless of how parsing behaved.
+    if getattr(args, "format", None) is None:
+        args.format = "text"
 
     # Centralized encoding boundary (G3): operator-facing streams never
     # crash merely because the destination encoding cannot represent
