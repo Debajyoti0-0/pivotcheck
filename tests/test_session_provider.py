@@ -99,6 +99,11 @@ def test_provider_failure_is_distinct_from_collector_warning():
 def test_local_provider_preserves_collector_degradation(monkeypatch):
     from pivotcheck.discovery import local
 
+    # This test targets the Linux collector path specifically; pin the
+    # platform so cross-platform dispatch does not change its meaning.
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+
+
     session = SessionIdentity("local-a", "local", "Local A")
     monkeypatch.setattr(
         local.DiscoverySnapshot,
