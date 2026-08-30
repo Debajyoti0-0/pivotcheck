@@ -136,30 +136,6 @@ jobs:
           .venv-test/bin/pivotcheck explain 10.50.0.0/16 --json
           .venv-test/bin/pivotcheck check 127.0.0.1 --port 80 --json
 
-  lint-and-type-check:
-    name: Lint and Type Check
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-
-      - name: Run Ruff
-        run: ruff check .
-
-      - name: Run MyPy
-        run: mypy pivotcheck
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

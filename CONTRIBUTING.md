@@ -12,7 +12,7 @@ Thank you for considering a contribution to PivotCheck. This document outlines t
 ### Installation
 
 ```bash
-git clone https://github.com/<owner>/pivotcheck.git
+git clone https://github.com/Debajyoti0-0/pivotcheck.git
 cd pivotcheck
 python -m venv .venv
 source .venv/bin/activate  # or .venv\Scripts\activate on Windows
@@ -160,10 +160,9 @@ Every change requires appropriate test coverage:
 ### 5. Documentation
 
 Update relevant documentation:
-- `README.md` — If user-facing behavior changes
-- `PROJECT_ARCHITECTURE.md` — If architecture changes
-- `PROJECT_OUTPUT.md` — If output contracts change
-- `PROTOCOL_SCOPE.md` — If protocol scope changes
+- `README.md` — If user-facing behavior, architecture, output contracts, or protocol scope change
+- `docs/` — If focused technical documentation changes
+- `CHANGELOG.md` — For user-visible changes
 - Docstrings — For new public APIs
 
 ### 6. Commit Discipline
@@ -214,8 +213,8 @@ No "WIP", "fix", "update" without context.
 ### Documentation
 
 - Docstrings on all public classes/functions
-- Architecture docs in `docs/` and root `.md` files
-- Output contracts in `PROJECT_OUTPUT.md`
+- Architecture and output-contract documentation in `README.md`
+- Focused technical documentation in `docs/`
 
 ## What We Accept
 
@@ -256,10 +255,9 @@ Maintainers handle versioning and releases. Contributors do not bump versions or
 ## Questions?
 
 Open a GitHub Discussion or check existing documentation:
-- `PROJECT_ARCHITECTURE.md` — System architecture
-- `PROJECT_OUTPUT.md` — Output contracts
-- `PROTOCOL_SCOPE.md` — Protocol decisions
-- `RELEASE_READINESS_FINAL.md` — Release standards
+- `README.md` — Architecture, evidence model, output contracts, protocol scope
+- [`docs/`](docs/) — Focused technical documentation
+- `SECURITY.md` — Security policy and invariants
 
 ---
 

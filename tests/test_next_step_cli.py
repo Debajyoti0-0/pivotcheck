@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from pivotcheck import __version__
 from pivotcheck.cli import (
     EXIT_BASELINE_NOT_FOUND,
     EXIT_BASELINE_SCHEMA,
@@ -109,7 +110,7 @@ class TestNextCommand:
         out = capsys.readouterr().out
         data = json.loads(out)
         assert data["tool"] == "pivotcheck"
-        assert data["version"] == "0.1.0"
+        assert data["version"] == __version__
         assert "timestamp" in data
         assert data["candidate"] is None
         assert data["message"] == "NO INVESTIGATION CANDIDATES"

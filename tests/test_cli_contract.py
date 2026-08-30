@@ -15,11 +15,13 @@ import json
 import subprocess
 import sys
 
+from pivotcheck import __version__
+
 
 def run_cli(*args: str, input_data: str | None = None) -> subprocess.CompletedProcess:
     """Run pivotcheck CLI and return result."""
     cmd = [sys.executable, "-m", "pivotcheck"] + list(args)
-    return subprocess.run(cmd, capture_output=True, text=True, input=input_data, timeout=30)
+    return subprocess.run(cmd, capture_output=True, text=True, input=input_data, check=False, timeout=30)
 
 
 class TestGlobalOptions:
@@ -30,7 +32,7 @@ class TestGlobalOptions:
         result = run_cli("--version")
         assert result.returncode == 0
         assert "pivotcheck" in result.stdout
-        assert "0.1.0" in result.stdout
+        assert __version__ in result.stdout
 
     def test_help(self):
         """--help works globally."""

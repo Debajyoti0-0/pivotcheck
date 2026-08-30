@@ -12,12 +12,13 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from typing import ClassVar
 
 
 def run_cli(*args: str) -> subprocess.CompletedProcess:
     """Run pivotcheck CLI and return result."""
     cmd = [sys.executable, "-m", "pivotcheck"] + list(args)
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    return subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=30)
 
 
 class TestJSONSchemaStability:
@@ -27,7 +28,7 @@ class TestJSONSchemaStability:
         """Check command JSON has required fields."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "check", "127.0.0.1", "--port", "80", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 
@@ -68,7 +69,7 @@ class TestJSONSchemaStability:
         """Next command JSON has required fields."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "next", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 
@@ -100,7 +101,7 @@ class TestJSONSchemaStability:
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "proxy-check",
              "--proxy", "socks5://127.0.0.1:1080", "127.0.0.1", "--port", "80", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         # May fail due to connection refused, but JSON should be valid
         if result.returncode == 0:
@@ -139,7 +140,7 @@ class TestJSONSchemaStability:
         """Gaps command JSON has required fields."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "gaps", "10.50.0.0/16", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 
@@ -167,7 +168,7 @@ class TestJSONSchemaStability:
         """Explain command JSON has required fields."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "explain", "10.50.0.0/16", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 
@@ -183,7 +184,7 @@ class TestJSONSchemaStability:
         """Discover command JSON has required fields."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "discover", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 
@@ -206,7 +207,7 @@ class TestJSONSchemaStability:
         """Map command JSON has required fields."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "map", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 
@@ -218,7 +219,7 @@ class TestJSONSchemaStability:
         """Baseline list JSON has required fields."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "baseline", "list", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 
@@ -236,7 +237,7 @@ class TestJSONTypeStability:
         """Check status is always string enum."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "check", "127.0.0.1", "--port", "80", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 
@@ -250,7 +251,7 @@ class TestJSONTypeStability:
         """Next priority is always string enum."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "next", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 
@@ -263,7 +264,7 @@ class TestJSONTypeStability:
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "proxy-check",
              "--proxy", "socks5://127.0.0.1:1080", "127.0.0.1", "--port", "80", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         if result.returncode == 0:
             data = json.loads(result.stdout)
@@ -280,7 +281,7 @@ class TestJSONDeterminism:
         for _ in range(3):
             result = subprocess.run(
                 [sys.executable, "-m", "pivotcheck", "check", "127.0.0.1", "--port", "80", "--json"],
-                capture_output=True, text=True, timeout=30
+                capture_output=True, text=True, check=False, timeout=30
             )
             if result.returncode == 0:
                 data = json.loads(result.stdout)
@@ -301,7 +302,7 @@ class TestJSONDeterminism:
         for _ in range(3):
             result = subprocess.run(
                 [sys.executable, "-m", "pivotcheck", "next", "--json"],
-                capture_output=True, text=True, timeout=30
+                capture_output=True, text=True, check=False, timeout=30
             )
             if result.returncode == 0:
                 data = json.loads(result.stdout)
@@ -317,7 +318,7 @@ class TestJSONDeterminism:
 class TestEpistemicLanguageAudit:
     """Audit output for epistemic correctness - no overclaiming."""
 
-    FORBIDDEN_TERMS = [
+    FORBIDDEN_TERMS: ClassVar[list[str]] = [
         "reachable",
         "confirmed",
         "verified",
@@ -330,7 +331,7 @@ class TestEpistemicLanguageAudit:
         "viable",
     ]
 
-    ALLOWED_IN_CONTEXT = {
+    ALLOWED_IN_CONTEXT: ClassVar[dict[str, list[str]]] = {
         "reachable": ["route evidence observed", "route context exists", "actively validated"],
         "pivot": ["inferred pivot context", "transit candidate", "pivot path"],
         "confirmed": ["actively validated", "validation confirmed"],
@@ -341,7 +342,7 @@ class TestEpistemicLanguageAudit:
         """Check command output must not overclaim."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "check", "127.0.0.1", "--port", "80"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         output = result.stdout.lower()
 
@@ -353,7 +354,7 @@ class TestEpistemicLanguageAudit:
         """Next command output must not overclaim."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "next"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         output = result.stdout.lower()
 
@@ -369,7 +370,7 @@ class TestEpistemicLanguageAudit:
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "proxy-check",
              "--proxy", "socks5://127.0.0.1:1080", "127.0.0.1", "--port", "80"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         output = result.stdout.lower()
 
@@ -382,7 +383,7 @@ class TestEpistemicLanguageAudit:
         """Gaps output must use precise evidence states."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "gaps", "10.50.0.0/16"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         output = result.stdout
 
@@ -396,7 +397,7 @@ class TestEpistemicLanguageAudit:
         # Check text output
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "explain", "10.50.0.0/16"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         output = result.stdout
 
@@ -406,7 +407,7 @@ class TestEpistemicLanguageAudit:
         # Check JSON output for limitations
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "explain", "10.50.0.0/16", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
         assert "limitations" in data
@@ -420,7 +421,7 @@ class TestEvidenceStateDistinctions:
         """Gaps command must distinguish all evidence states."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "gaps", "10.50.0.0/16", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 
@@ -433,7 +434,7 @@ class TestEvidenceStateDistinctions:
         """Next command must explicitly state limitations."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "next", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 
@@ -451,7 +452,7 @@ class TestNoImplicitScanning:
         """Check must reject CIDR notation or treat as unresolvable hostname."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "check", "10.50.0.0/16", "--port", "80"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         # CIDR notation is treated as invalid hostname -> DNS_ERROR (exit 3)
         # or could be rejected as invalid target (exit 2)
@@ -461,7 +462,7 @@ class TestNoImplicitScanning:
         """Check must reject port ranges."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "check", "127.0.0.1", "--port", "80-443"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         assert result.returncode == 2
 
@@ -470,7 +471,7 @@ class TestNoImplicitScanning:
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "proxy-check",
              "--proxy", "socks5://127.0.0.1:1080", "127.0.0.1", "--port", "80-443"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         assert result.returncode == 2
 
@@ -478,7 +479,7 @@ class TestNoImplicitScanning:
         """Next command never auto-validates."""
         result = subprocess.run(
             [sys.executable, "-m", "pivotcheck", "next", "--json"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, check=False, timeout=30
         )
         data = json.loads(result.stdout)
 

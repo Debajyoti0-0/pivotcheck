@@ -7,6 +7,7 @@ are made during passive analysis.
 
 from __future__ import annotations
 
+import contextlib
 import socket
 from unittest.mock import patch
 
@@ -142,11 +143,12 @@ class TestNoNetworkCallsInPassiveAnalysis:
             tracker.record("socket.socket", args, kwargs)
             return original_socket(*args, **kwargs)
 
-        with patch("socket.socket", tracking_socket):
-            with patch("socket.create_connection", lambda *a, **k: tracker.record("socket.create_connection", a, k)):
-                with patch("socket.getaddrinfo", lambda *a, **k: tracker.record("socket.getaddrinfo", a, k)):
-                    with patch("socket.gethostbyname", lambda *a, **k: tracker.record("socket.gethostbyname", a, k)):
-                        analyze(snapshot)
+        with patch("socket.socket", tracking_socket), patch(
+            "socket.create_connection", lambda *a, **k: tracker.record("socket.create_connection", a, k)
+        ), patch("socket.getaddrinfo", lambda *a, **k: tracker.record("socket.getaddrinfo", a, k)), patch(
+            "socket.gethostbyname", lambda *a, **k: tracker.record("socket.gethostbyname", a, k)
+        ):
+            analyze(snapshot)
 
         tracker.assert_no_calls()
 
@@ -154,9 +156,10 @@ class TestNoNetworkCallsInPassiveAnalysis:
         """assess_transit_evidence() must not make network calls."""
         snapshot = _make_snapshot()
 
-        with patch("socket.socket", lambda *a, **k: tracker.record("socket.socket", a, k)):
-            with patch("socket.create_connection", lambda *a, **k: tracker.record("socket.create_connection", a, k)):
-                assess_transit_evidence(snapshot)
+        with patch("socket.socket", lambda *a, **k: tracker.record("socket.socket", a, k)), patch(
+            "socket.create_connection", lambda *a, **k: tracker.record("socket.create_connection", a, k)
+        ):
+            assess_transit_evidence(snapshot)
 
         tracker.assert_no_calls()
 
@@ -165,9 +168,10 @@ class TestNoNetworkCallsInPassiveAnalysis:
         snapshot = _make_snapshot()
         transit = assess_transit_evidence(snapshot)
 
-        with patch("socket.socket", lambda *a, **k: tracker.record("socket.socket", a, k)):
-            with patch("socket.create_connection", lambda *a, **k: tracker.record("socket.create_connection", a, k)):
-                select_next_investigation(snapshot, transit_evidence=transit)
+        with patch("socket.socket", lambda *a, **k: tracker.record("socket.socket", a, k)), patch(
+            "socket.create_connection", lambda *a, **k: tracker.record("socket.create_connection", a, k)
+        ):
+            select_next_investigation(snapshot, transit_evidence=transit)
 
         tracker.assert_no_calls()
 
@@ -186,9 +190,10 @@ class TestNoNetworkCallsInPassiveAnalysis:
         """analyze_evidence_gaps() must not make network calls."""
         snapshot = _make_snapshot()
 
-        with patch("socket.socket", lambda *a, **k: tracker.record("socket.socket", a, k)):
-            with patch("socket.create_connection", lambda *a, **k: tracker.record("socket.create_connection", a, k)):
-                analyze_evidence_gaps(snapshot, "10.50.0.0/16")
+        with patch("socket.socket", lambda *a, **k: tracker.record("socket.socket", a, k)), patch(
+            "socket.create_connection", lambda *a, **k: tracker.record("socket.create_connection", a, k)
+        ):
+            analyze_evidence_gaps(snapshot, "10.50.0.0/16")
 
         tracker.assert_no_calls()
 
@@ -196,9 +201,10 @@ class TestNoNetworkCallsInPassiveAnalysis:
         """explain_network() must not make network calls."""
         snapshot = _make_snapshot()
 
-        with patch("socket.socket", lambda *a, **k: tracker.record("socket.socket", a, k)):
-            with patch("socket.create_connection", lambda *a, **k: tracker.record("socket.create_connection", a, k)):
-                explain_network("10.50.0.0/16", snapshot)
+        with patch("socket.socket", lambda *a, **k: tracker.record("socket.socket", a, k)), patch(
+            "socket.create_connection", lambda *a, **k: tracker.record("socket.create_connection", a, k)
+        ):
+            explain_network("10.50.0.0/16", snapshot)
 
         tracker.assert_no_calls()
 
@@ -227,12 +233,9 @@ class TestActiveCommandsDoNetwork:
             call_made["value"] = True
             return original_connect(self, *args, **kwargs)
 
-        with patch("socket.socket.connect", tracking_connect):
+        with patch("socket.socket.connect", tracking_connect), contextlib.suppress(Exception):
             # This should fail on connection but the connect() should be called
-            try:
-                check_tcp("127.0.0.1", 9999, 0.1, target="127.0.0.1")
-            except Exception:
-                pass
+            check_tcp("127.0.0.1", 9999, 0.1, target="127.0.0.1")
 
         assert call_made["value"], "check_tcp should call socket.connect"
 

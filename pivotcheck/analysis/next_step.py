@@ -41,7 +41,8 @@ class NextStepCandidate:
     def to_dict(self) -> dict:
         """Serialize per the documented ``next`` candidate contract.
 
-        Keys follow PROJECT_OUTPUT.md section 10: ``observed_evidence``
+        Keys follow the documented ``next`` candidate contract in
+        README.md (Output Contracts): ``observed_evidence``
         (not the internal attribute name ``transit_evidence``), and the
         candidate never carries operator-facing limitation/suggestion
         fields — those are top-level report concerns.
@@ -104,7 +105,7 @@ class NextStepReport:
         }
         if self.candidate is not None:
             data["candidate"] = self.candidate.to_dict()
-            # Documented top-level fields (PROJECT_OUTPUT.md section 10):
+            # Documented top-level fields (README.md, Output Contracts):
             # the suggested action is a structured object and limitations
             # answer "what does this evidence not prove" at report scope.
             data["suggested_action"] = {

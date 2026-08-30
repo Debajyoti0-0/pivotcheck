@@ -111,8 +111,8 @@ _PUBLIC_COMPARISON_LABELS: dict[str, str] = {
 def public_comparison_label(value: str | None) -> str | None:
     """Map an internal comparison label to the documented public vocabulary.
 
-    Single serialization-boundary mapping (PROJECT_OUTPUT.md sections 7
-    and 10). Internal labels such as NEW_REACHABILITY must never reach
+    Single serialization-boundary mapping (see README.md, Output
+    Contracts). Internal labels such as NEW_REACHABILITY must never reach
     operator-facing text or JSON verbatim.
     """
     if value is None:
@@ -225,8 +225,8 @@ class ComparisonContext:
     (e.g. NEW_REACHABILITY). These are INTERNAL analysis labels: they are
     never emitted verbatim to operators. All serialization boundaries map
     them through :func:`public_comparison_label` to the documented public
-    vocabulary (NEW / EXPANDED / REDUCED / UNCHANGED, see PROJECT_OUTPUT.md
-    sections 7 and 10).
+    vocabulary (NEW / EXPANDED / REDUCED / UNCHANGED, see README.md,
+    Output Contracts).
     """
 
     baseline: str

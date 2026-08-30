@@ -395,7 +395,7 @@ def check_proxy(
             classify_socket_error(exc), ProxyStageStatus.LOCAL_ERROR
         )
         if not status_possible(stage, mapped):
-            # Deterministic fallback (documented in PROJECT_ARCHITECTURE.md):
+            # Deterministic fallback (documented in README.md):
             # after the TCP stage, raw transport outcomes such as a
             # mid-exchange connection reset carry no SOCKS5 reply meaning,
             # and the model forbids transport-only statuses there. They are

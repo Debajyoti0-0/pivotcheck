@@ -4,7 +4,7 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.x   | ✅ Active development |
+| 1.0.x   | ✅ Stable release  |
 
 ## Reporting a Vulnerability
 
@@ -12,7 +12,9 @@ We take security vulnerabilities seriously. If you discover a security issue in 
 
 ### Private Disclosure
 
-**Preferred:** Report security vulnerabilities privately via email to the maintainers.
+**Preferred:** Report security vulnerabilities privately via GitHub security
+advisories at
+<https://github.com/Debajyoti0-0/pivotcheck/security/advisories>.
 
 **Do NOT** create a public GitHub issue for security vulnerabilities.
 
@@ -74,8 +76,9 @@ Violations of these invariants are security bugs.
 
 ### Contact
 
-For security reports, contact the maintainers through the GitHub repository's security advisory feature or the email listed in the repository metadata.
+For security reports, use the GitHub security advisory feature at
+<https://github.com/Debajyoti0-0/pivotcheck/security/advisories>.
 
 ---
 
-*This policy applies to PivotCheck v0.1.0 and subsequent versions unless superseded.*
+*This policy applies to PivotCheck v1.0.0 and subsequent versions unless superseded.*

@@ -122,9 +122,11 @@ class TestFilesystemSideEffects:
             calls.append(("mkstemp", args, kwargs))
             return original_mkstemp(*args, **kwargs)
 
-        with patch("tempfile.mkstemp", tracking_mkstemp):
-            with patch("tempfile.NamedTemporaryFile", lambda *a, **k: calls.append(("NamedTemporaryFile", a, k)) or original_mkstemp(*a, **k)):
-                analyze(snapshot)
+        with patch("tempfile.mkstemp", tracking_mkstemp), patch(
+            "tempfile.NamedTemporaryFile",
+            lambda *a, **k: calls.append(("NamedTemporaryFile", a, k)) or original_mkstemp(*a, **k),
+        ):
+            analyze(snapshot)
 
         assert len(calls) == 0, f"Unexpected tempfile calls: {calls}"
 

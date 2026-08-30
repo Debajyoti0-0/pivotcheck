@@ -4,23 +4,34 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pivotcheck"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Passive network discovery and pivot path validation for authorized security assessments"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "GPL-3.0-only" }
 authors = [{ name = "PivotCheck contributors" }]
 keywords = ["security", "pentest", "pivot", "network", "recon"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Information Technology",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Security",
 ]
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/Debajyoti0-0/pivotcheck"
+Issues = "https://github.com/Debajyoti0-0/pivotcheck/issues"
+Changelog = "https://github.com/Debajyoti0-0/pivotcheck/blob/master/CHANGELOG.md"
+"Security Policy" = "https://github.com/Debajyoti0-0/pivotcheck/blob/master/SECURITY.md"
 
 [project.optional-dependencies]
 socks = ["PySocks>=1.7.1"]
@@ -31,6 +42,9 @@ pivotcheck = "pivotcheck.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["pivotcheck*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "pivotcheck.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
