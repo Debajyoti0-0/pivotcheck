@@ -23,3 +23,7 @@ htmlcov/
 
 # AutoClaw KDream data
 .autoclaw/
+
+# Development tooling configurations
+.claude/
+.clinerules/
