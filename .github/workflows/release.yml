@@ -1,0 +1,293 @@
+name: Release
+
+# Production release pipeline. Triggered intentionally by pushing an
+# annotated vX.Y.Z tag, or manually via workflow_dispatch (which defaults
+# to TestPyPI so production publishing always requires the tag path or an
+# explicit index choice).
+#
+# Pipeline: validate (tag/version integrity + full quality gates + build
+# once + artifact audit) -> github-release (changelog-derived notes, same
+# validated artifacts) -> pypi-publish (Trusted Publishing OIDC, no
+# rebuild) -> verify-install (fresh venv from the public index).
+#
+# Every stage fails closed: a version/tag mismatch, a failing gate, a
+# dirty artifact, or a failed publish stops the pipeline before the next
+# stage. Validated artifacts are never rebuilt.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v1.0.0)"
+        required: true
+        type: string
+      index:
+        description: "Package index to publish to"
+        required: true
+        default: testpypi
+        type: choice
+        options:
+          - testpypi
+          - pypi
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate ${{ inputs.tag || github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.context.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      index: ${{ steps.context.outputs.index }}
+      make_github_release: ${{ steps.context.outputs.make_github_release }}
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Resolve tag, index, and release scope
+        id: context
+        run: |
+          if [ -n "$TAG_INPUT" ]; then
+            echo "tag=$TAG_INPUT" >> "$GITHUB_OUTPUT"
+            echo "index=$INDEX_INPUT" >> "$GITHUB_OUTPUT"
+            if [ "$INDEX_INPUT" = "pypi" ]; then
+              echo "make_github_release=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "make_github_release=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "index=pypi" >> "$GITHUB_OUTPUT"
+            echo "make_github_release=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+          INDEX_INPUT: ${{ inputs.index }}
+
+      - name: Verify tag format, exact-match, and package version integrity
+        id: version
+        run: |
+          TAG="${{ steps.context.outputs.tag }}"
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::Tag '$TAG' does not match vX.Y.Z"; exit 1 ;;
+          esac
+          VERSION="${TAG#v}"
+          ACTUAL="$(python -c 'from pivotcheck import __version__ as v; print(v)')"
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "::error::Version mismatch: tag '$TAG' requires package version '$VERSION' but source declares '$ACTUAL'"
+            exit 1
+          fi
+          TAG_COMMIT="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          HEAD_COMMIT="$(git rev-parse HEAD)"
+          if [ "$TAG_COMMIT" != "$HEAD_COMMIT" ]; then
+            echo "::error::Tag '$TAG' does not point at the checked-out commit"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Release integrity OK: tag=$TAG version=$VERSION commit=${HEAD_COMMIT:0:12}"
+
+      - name: Install dev toolchain
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" build
+
+      - name: Unit tests
+        run: python -m pytest tests/ -q
+
+      - name: Integration tests
+        run: python -m pytest -m integration -q
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: MyPy
+        run: mypy pivotcheck
+
+      - name: Build distributions (once)
+        run: python -m build
+
+      - name: Audit distribution contents
+        run: |
+          python - <<'EOF'
+          import glob
+          import os
+          import sys
+          import tarfile
+          import zipfile
+
+          version = os.environ["VERSION"]
+          wheels = glob.glob("dist/*.whl")
+          sdists = glob.glob("dist/*.tar.gz")
+          if len(wheels) != 1 or len(sdists) != 1:
+              sys.exit(f"::error::Expected exactly one wheel and one sdist, got {wheels} + {sdists}")
+          wheel, sdist = wheels[0], sdists[0]
+          if version not in wheel or version not in sdist:
+              sys.exit(f"::error::Distribution filenames do not carry release version {version}: {wheel}, {sdist}")
+
+          forbidden = ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+                       ".git/", ".venv", "dist/", ".coverage", ".pytest_tmp")
+          with zipfile.ZipFile(wheel) as z:
+              names = z.namelist()
+              hits = [n for n in names if any(p in n for p in forbidden)]
+              if hits:
+                  sys.exit(f"::error::Wheel contains forbidden paths: {hits[:5]}")
+              if f"pivotcheck-{version}.dist-info/licenses/LICENSE" not in names:
+                  sys.exit("::error::Wheel is missing the LICENSE file")
+              if not any(n.startswith("pivotcheck/") for n in names):
+                  sys.exit("::error::Wheel does not contain the pivotcheck package")
+              print(f"wheel audit OK: {len(names)} members")
+
+          allowed_top = {"LICENSE", "PKG-INFO", "README.md", "pyproject.toml",
+                         "setup.cfg", "pivotcheck", "tests", "pivotcheck.egg-info"}
+          with tarfile.open(sdist) as t:
+              top = {n.split("/")[1] for n in t.getnames() if n.count("/") >= 1 and n.split("/")[1]}
+              unexpected = top - allowed_top
+              if unexpected:
+                  sys.exit(f"::error::SDist contains unexpected top-level entries: {sorted(unexpected)}")
+              print(f"sdist audit OK: top-level = {sorted(top)}")
+          EOF
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+
+      - name: Upload validated distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: validated-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  github-release:
+    name: GitHub Release
+    needs: validate
+    if: needs.validate.outputs.make_github_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Download validated distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: validated-dist
+          path: dist/
+
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          python - <<'EOF'
+          import re
+          import sys
+
+          version = "${{ needs.validate.outputs.version }}"
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          match = re.search(
+              rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## |\Z)",
+              text,
+              re.M | re.S,
+          )
+          if not match:
+              sys.exit(f"::error::CHANGELOG.md has no '## [{version}]' section; refusing to invent release notes")
+          open("release_notes.md", "w", encoding="utf-8").write(match.group(1).strip() + "\n")
+          print("release notes extracted from CHANGELOG.md")
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          name: PivotCheck ${{ needs.validate.outputs.tag }}
+          body_path: release_notes.md
+          files: dist/*
+          fail_on_unmatched_files: true
+
+  pypi-publish:
+    name: Publish to ${{ needs.validate.outputs.index }}
+    needs: [validate, github-release]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.validate.result == 'success'
+        && (needs.github-release.result == 'success' || needs.github-release.result == 'skipped')
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ needs.validate.outputs.index == 'pypi' && 'pypi' || 'testpypi' }}
+    permissions:
+      id-token: write
+    steps:
+      - name: Download validated distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: validated-dist
+          path: dist/
+
+      - name: Publish exact validated artifacts (no rebuild)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: ${{ needs.validate.outputs.index == 'pypi' && 'https://upload.pypi.org/legacy/' || 'https://test.pypi.org/legacy/' }}
+          attestations: ${{ needs.validate.outputs.index == 'pypi' }}
+
+  verify-install:
+    name: Post-publish install verification
+    needs: [validate, pypi-publish]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.validate.result == 'success'
+        && needs.pypi-publish.result == 'success'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install published package from the public index
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          if [ "${{ needs.validate.outputs.index }}" = "pypi" ]; then
+            python -m pip install --upgrade pip
+            python -m pip install "pivotcheck==$VERSION"
+          else
+            python -m pip install --upgrade pip
+            python -m pip install --index-url https://test.pypi.org/simple/ "pivotcheck==$VERSION"
+          fi
+
+      - name: Verify installed version, entry point, and deterministic commands
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          INSTALLED="$(pivotcheck --version)"
+          echo "installed: $INSTALLED"
+          [ "$INSTALLED" = "pivotcheck $VERSION" ] || {
+            echo "::error::Installed version '$INSTALLED' does not match release $VERSION"
+            exit 1
+          }
+          pivotcheck --help > /dev/null
+          pivotcheck next --json | python -c "import json,sys; d=json.load(sys.stdin); assert d['tool']=='pivotcheck' and d['version']=='$VERSION'"
+          pivotcheck gaps 10.50.0.0/16 --json | python -c "import json,sys; d=json.load(sys.stdin); assert d['tool']=='pivotcheck' and d['version']=='$VERSION'"
+          echo "Post-publish verification OK: a real user install of pivotcheck $VERSION works."
