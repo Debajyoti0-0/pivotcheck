@@ -84,6 +84,27 @@ def make_candidate_snapshot():
 class TestNextCommand:
     """Test the next command CLI integration."""
 
+    @pytest.fixture(autouse=True)
+    def _no_evidence(self, monkeypatch):
+        """Mock discovery to an evidence-free snapshot.
+
+        The ``next`` command reads the host's real routing/neighbor state;
+        whether an environment yields zero candidates is not deterministic
+        (e.g. a cloud runner has a default route and yields a genuine
+        candidate). Contract tests here construct the input explicitly:
+        an empty snapshot guarantees the no-candidate path. Tests that
+        exercise the candidate-present path override this patch below.
+        Zero real network I/O either way — discovery only reads local state.
+        """
+        from pivotcheck import cli
+        from pivotcheck.models.result import DiscoverySnapshot
+
+        monkeypatch.setattr(
+            cli,
+            "run_discovery",
+            lambda *a, **k: DiscoverySnapshot(hostname="", os_name="", networks=()),
+        )
+
     def test_next_help(self, capsys):
         """Test that help works."""
         with pytest.raises(SystemExit) as exc:
