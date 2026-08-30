@@ -97,6 +97,7 @@ class TestEncodingConstrainedTextOutput:
         assert "\u2550" not in text
 
     def test_check_text_survives_cp1252(self, monkeypatch):
+        from pivotcheck.models.check import CheckResult, CheckStatus
         from pivotcheck.models.result import DiscoverySnapshot
 
         monkeypatch.setattr(
@@ -104,9 +105,23 @@ class TestEncodingConstrainedTextOutput:
             "run_discovery",
             lambda: DiscoverySnapshot(hostname="", os_name="", networks=()),
         )
+
+        # Deterministic TIMEOUT result: an encoding test must not depend on
+        # live network behavior. Whether a closed loopback port REFUSES
+        # (POSIX) or DROPS (Windows firewall) is environment-dependent, so
+        # the transport boundary is mocked and the intended outcome is
+        # constructed explicitly. Zero real network calls.
+        def fake_check_tcp(address, port, timeout_s, target=None):
+            return CheckResult(
+                target=target or address,
+                address=address,
+                port=port,
+                status=CheckStatus.TIMEOUT,
+            )
+
+        monkeypatch.setattr(cli, "check_tcp", fake_check_tcp)
         stream = _cp1252_stream()
         monkeypatch.setattr(sys, "stdout", stream)
-        # Loopback-only active check, bounded by the 0.1s timeout.
         code = cli.main(["check", "127.0.0.1", "--port", "1", "--timeout", "0.1"])
         stream.flush()
         text = _get_stream_bytes(stream).decode("cp1252")
