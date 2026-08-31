@@ -244,5 +244,50 @@ No v2.1 branch, protocol branch, or speculative abstraction was created. The
 next engineering phase is gated on: publishing v2.0.1, then continued evidence
 collection per the decision above.
 
+---
+
+## 8. Stage 9 Closure — Corrective Release Record (2026-08-31)
+
+Historical evidence above is preserved unchanged. Closure status:
+
+```text
+DEFECT-001 (explain CURRENT_EVIDENCE misclassification)
+  Status:        FIXED / PUBLICLY VERIFIED
+  Fixed in:      v2.0.1 (commit 067524a), published to PyPI 2026-08-31T11:50:07Z
+  Reproduction:  pivotcheck explain 10.99.99.0/24 on public 2.0.0 →
+                 "Classification: CURRENT_EVIDENCE / Network observed in
+                 current discovery evidence" (fabricated observation)
+  Verified:      public 2.0.1 artifact (fresh venv, neutral CWD) →
+                 "Classification: NOT_OBSERVED / Network not found in current
+                 discovery evidence"
+
+DEFECT-002 (invalid-CIDR traceback in gaps/explain)
+  Status:        FIXED / PUBLICLY VERIFIED
+  Fixed in:      v2.0.2 (commit 4a10e74), published to PyPI 2026-08-31T13:18:24Z
+  Reproduction:  pivotcheck gaps 999.999.1.0/24 on public 2.0.0 AND public
+                 2.0.1 → uncaught ValueError traceback, exit 1
+  Root cause:    raw operator input flowed unvalidated from the CLI into
+                 Network(cidr=...) / ipaddress.ip_network()
+  Minimal fix:   pure argument validation at the CLI boundary
+                 (cli._validate_network_argument) before discovery; no
+                 side effects on invalid input; original argument passed
+                 through unchanged for valid input
+  Verified:      public 2.0.2 artifact (fresh venv, neutral CWD) →
+                 exit 2, clean "[-] Invalid network argument" message,
+                 no traceback, empty stdout on JSON error paths
+```
+
+Process finding preserved for the record: the v2.0.1 tag was pushed and its
+release pipeline succeeded mid-Stage-9 (11:48–11:50 UTC) with only DEFECT-001
+corrected, so DEFECT-002 could not ship under the immutable 2.0.1 version
+identifier. The corrective release therefore shipped as **v2.0.2** — still a
+patch release correcting existing 2.0 capability defects, per the Stage 9
+decision gate. Regression coverage added: 24 CLI-level tests
+(tests/test_intelligence_cli.py::TestNetworkArgumentValidation), including
+DEFECT-001 boundary assertions, JSON error paths, and a no-side-effects test
+proving discovery never runs for invalid input. Release pipeline run #4
+(v2.0.2): completed / success; CI matrix 3.10–3.14 green.
+
+
 
 
