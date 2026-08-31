@@ -35,6 +35,7 @@ Changelog = "https://github.com/Debajyoti0-0/pivotcheck/blob/master/CHANGELOG.md
 
 [project.optional-dependencies]
 socks = ["PySocks>=1.7.1"]
+smb = ["smbprotocol>=1.15,<2"]
 dev = ["pytest>=8.0", "pytest-cov", "ruff", "mypy"]
 
 [project.scripts]

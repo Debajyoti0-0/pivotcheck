@@ -109,17 +109,27 @@ is down.
 
 ## Validation Scope
 
-Two protocols, both transport-layer, both strictly operator-directed:
+Four validation capabilities, all strictly operator-directed:
 
 - **TCP** (`check`) — explicit target, explicit ports, one attempt per
   address:port. Port ranges are rejected; at most 16 explicit ports.
+- **SSH** (`check --protocol ssh`) — one public-key authentication attempt
+  against one target:port, credential supplied via `--ssh-key-env`. Strict
+  host-key verification by default; server-identity verification is
+  reported separately from authentication success.
+- **SMB** (`check --protocol smb`) — one NTLM session-setup attempt against
+  one target:port (default 445), password credential supplied via
+  `--credential-env`. Requires the optional `smb` extra
+  (`pip install "pivotcheck[smb]"`). No share enumeration, no fallback
+  chains, no execution — authentication only.
 - **SOCKS5 CONNECT** (`proxy-check`) — one proxy, one destination, one
   port, one attempt. Hostnames are resolved by the proxy, never locally.
 
 UDP is deliberately not supported: no response is not evidence of
 unreachability, and PivotCheck does not make claims it cannot support.
-Application-layer validation (SSH, SMB, RDP, HTTP, …) is out of scope —
-a reachable TCP port does not mean the service works.
+Application-layer validation beyond authentication (SMB share access,
+remote execution, SSH command execution, HTTP) is out of scope — an
+accepted credential does not mean the service "works" beyond accepting it.
 
 ## Output
 

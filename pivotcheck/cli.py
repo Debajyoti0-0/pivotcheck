@@ -62,6 +62,7 @@ from pivotcheck.checks.context import (
 )
 from pivotcheck.checks.proxy import check_proxy, parse_proxy_url
 from pivotcheck.checks.resolver import resolve_target, validate_target
+from pivotcheck.checks.smb import validate_smb_auth
 from pivotcheck.checks.ssh import validate_ssh_auth
 from pivotcheck.checks.tcp import check_tcp, validate_port, validate_timeout
 from pivotcheck.discovery.engine import run_discovery
@@ -84,6 +85,10 @@ from pivotcheck.models.proxy_check import (
     ProxyStageStatus,
 )
 from pivotcheck.models.result import DiscoverySnapshot
+from pivotcheck.models.smb_check import (
+    SMBCheckReport,
+    SMBCheckStatus,
+)
 from pivotcheck.models.ssh_check import (
     SSHCheckReport,
     SSHCheckStatus,
@@ -107,6 +112,7 @@ from pivotcheck.output.proxy_check import (
     render_proxy_check,
     render_proxy_check_json,
 )
+from pivotcheck.output.smb_check import render_smb_check, render_smb_check_json
 from pivotcheck.output.ssh_check import render_ssh_check, render_ssh_check_json
 from pivotcheck.output.terminal import render_detailed, should_use_color
 from pivotcheck.output.writer import text_stream
@@ -275,12 +281,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument(
         "--protocol",
-        choices=["tcp", "ssh"],
+        choices=["tcp", "ssh", "smb"],
         default="tcp",
         help="validation protocol: tcp (default) performs one explicit "
         "TCP connection per listed port; ssh performs one public-key "
         "authentication attempt against one target:port using a "
-        "credential supplied via --ssh-key-env",
+        "credential supplied via --ssh-key-env; smb performs one NTLM "
+        "session-setup attempt against one target:port using a "
+        "credential supplied via --credential-env",
     )
     check.add_argument(
         "--ssh-user",
@@ -293,6 +301,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="environment variable holding SSH private-key material "
         "(SSH protocol only; required for --protocol ssh). The value is "
         "never printed, logged, or persisted.",
+    )
+    check.add_argument(
+        "--credential-env",
+        metavar="VARIABLE",
+        help="environment variable holding SMB password material "
+        "(SMB protocol only; required for --protocol smb). The value is "
+        "never printed, logged, or persisted.",
+    )
+    check.add_argument(
+        "--smb-user",
+        help="SMB username (SMB protocol only; defaults to the current "
+        "OS user)",
     )
     check.add_argument(
         "--ssh-accept-new-hostkeys",
@@ -620,6 +640,8 @@ def _run_check(args: argparse.Namespace) -> int:
     """Execute a controlled reachability check. Returns a process exit code."""
     if getattr(args, "protocol", "tcp") == "ssh":
         return _run_check_ssh(args)
+    if getattr(args, "protocol", "tcp") == "smb":
+        return _run_check_smb(args)
     ports = _parse_ports(args.port)
     if ports is None:
         print("[-] Invalid --port value.", file=sys.stderr)
@@ -905,6 +927,102 @@ def _get_env_password(env_name: str) -> str | None:
     Returns the password string, or None if not set/empty (caller handles errors).
     """
     return os.environ.get(env_name)
+
+
+def _run_check_smb(args: argparse.Namespace) -> int:
+    """Execute ONE SMB session-setup authentication validation.
+
+    Exit codes mirror the documented check contract:
+        0 — validation executed; AUTHENTICATED / AUTH_FAILED / TIMEOUT /
+            PROTOCOL_ERROR are data, not CLI failures
+        1 — fatal internal/local execution failure (e.g. SMB backend absent)
+        2 — invalid CLI usage (port, timeout, missing/invalid env var)
+        3 — target could not be resolved
+    """
+    from pivotcheck.checks.smb import SmbBackendUnavailable
+    from pivotcheck.utils.credential_loader import CredentialLoadError, load_credential
+
+    if getattr(args, "baseline", None):
+        print(
+            "[-] --baseline is not supported for --protocol smb: baseline "
+            "comparison is passive-topology context and does not apply to "
+            "an active authentication attempt.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    port = _parse_single_port(args.port)
+    if port is None:
+        print("[-] Invalid --port value for SMB validation.", file=sys.stderr)
+        print(
+            "    SMB validation is one target, one port: --port 445 (or one "
+            "explicit port). Lists and ranges are deliberately not supported.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        timeout_s = validate_timeout(args.timeout)
+    except ValueError as exc:
+        print(f"[-] Invalid --timeout: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    env_name = getattr(args, "credential_env", None)
+    if not env_name:
+        print(
+            "[-] --protocol smb requires --credential-env VARIABLE holding the "
+            "password material (command-line credential material is deliberately "
+            "not accepted; command lines are observable to other users).",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if not _validate_env_var_name(env_name):
+        print(f"[-] Invalid environment variable name: {env_name!r}", file=sys.stderr)
+        return EXIT_USAGE
+
+    username = args.smb_user or getpass.getuser()
+    try:
+        credential = load_credential(CredentialType.PASSWORD, env_name, username=username)
+    except CredentialLoadError as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    import socket as _socket
+    import uuid
+    from datetime import datetime, timezone
+
+    try:
+        result = validate_smb_auth(credential, args.target, port=port, timeout=timeout_s)
+    except SmbBackendUnavailable as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_FATAL
+    except ValueError as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    report = SMBCheckReport(
+        target=args.target,
+        port=port,
+        timeout_s=timeout_s,
+        results=(result,),
+        command="check",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        perspective_hostname=_socket.gethostname(),
+        perspective_session_id=uuid.uuid4().hex[:16],
+    )
+    stream = sys.stdout
+    if args.format == "json" or args.json:
+        render_smb_check_json(report, stream)
+    else:
+        color = should_use_color(sys.stdout, args.no_color)
+        render_smb_check(report, stream, color=color)
+
+    if result.status in (
+        SMBCheckStatus.INVALID_TARGET,
+        SMBCheckStatus.DNS_ERROR,
+    ):
+        return EXIT_RESOLVE
+    if result.status is SMBCheckStatus.LOCAL_ERROR:
+        return EXIT_FATAL
+    return EXIT_OK
 
 
 def _run_proxy_check(args: argparse.Namespace) -> int:
