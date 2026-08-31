@@ -63,3 +63,32 @@ def test_recommendations_are_deterministic_when_input_order_changes():
     first = DiscoverySnapshot("h", "o", networks=(DiscoveredNetwork("192.168.0.0/24", NetworkOrigin.CONNECTED, Confidence.HIGH), DiscoveredNetwork("172.16.0.0/24", NetworkOrigin.CONNECTED, Confidence.HIGH)))
     second = DiscoverySnapshot("h", "o", networks=tuple(reversed(first.networks)))
     assert recommend(first, report) == recommend(second, report)
+
+
+def test_explain_unobserved_network_is_not_reported_as_observed():
+    """Stage 9 regression: explain() on a network absent from the current
+    snapshot must be classified NOT_OBSERVED - never CURRENT_EVIDENCE."""
+    snapshot = DiscoverySnapshot("host", "OS", networks=(
+        DiscoveredNetwork("172.16.0.0/24", NetworkOrigin.CONNECTED, Confidence.HIGH, "eth0"),
+    ))
+    standalone = explain_network("10.9.9.0/24", snapshot)
+    assert standalone.classification == "NOT_OBSERVED"
+    assert "not found in current discovery evidence" in standalone.reason.lower()
+    assert standalone.origin is None and standalone.interface is None
+
+    with_report = explain_network(
+        "10.9.9.0/24", snapshot,
+        compare(perspective(BaselineNetwork("172.16.0.0/24", NetworkOrigin.CONNECTED, Confidence.HIGH)), perspective()),
+    )
+    assert with_report.classification == "NOT_OBSERVED"
+    assert "not found in current discovery evidence" in with_report.reason.lower()
+
+
+def test_explain_observed_network_still_current_evidence():
+    snapshot = DiscoverySnapshot("host", "OS", networks=(
+        DiscoveredNetwork("172.16.0.0/24", NetworkOrigin.CONNECTED, Confidence.HIGH, "eth0"),
+    ))
+    explanation = explain_network("172.16.0.0/24", snapshot)
+    assert explanation.classification == "CURRENT_EVIDENCE"
+    assert "observed in current discovery evidence" in explanation.reason.lower()
+    assert explanation.origin == "connected"

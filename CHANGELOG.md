@@ -2,6 +2,19 @@
 
 All notable changes to PivotCheck are documented in this file.
 
+## [2.0.1] — 2026-08-31
+
+### Fixed
+
+- `explain` no longer classifies a network that is absent from the current
+  discovery snapshot as `CURRENT_EVIDENCE`. Absent networks are now
+  classified `NOT_OBSERVED` ("Network not found in current discovery
+  evidence."), matching the limitations the same output already carried.
+  Found during Stage 9 operator-workflow validation: explaining a
+  mistyped/unobserved network produced a contradictory claim of
+  observation. Classification for genuinely observed networks is
+  unchanged, including comparison modes (`NEW_REACHABILITY`, etc.).
+
 ## [2.0.0] — 2026-08-31
 
 The 2.0 release turns PivotCheck into a cross-platform, evidence-driven

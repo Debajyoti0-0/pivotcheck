@@ -47,9 +47,11 @@ def _finding(network: str, report: DiffReport) -> DiffFinding | None:
     return None
 
 
-def _reason(finding: DiffFinding | None) -> str:
+def _reason(finding: DiffFinding | None, observed: bool = True) -> str:
     if finding is None:
-        return "Network observed in current discovery evidence."
+        if observed:
+            return "Network observed in current discovery evidence."
+        return "Network not found in current discovery evidence."
     reasons = {
         "NEW_REACHABILITY": "Newly observed network not present in baseline.",
         "EXPANDED_REACHABILITY": "Network coverage expanded relative to baseline.",
@@ -73,21 +75,34 @@ def explain_network(
     If not, provides standalone explanation from current evidence only.
     """
     canonical = str(ipaddress.ip_network(network, strict=False))
-    
-    if report is not None:
-        finding = _finding(canonical, report)
-        classification = finding.classification if finding else "CURRENT_EVIDENCE"
-        reason = _reason(finding)
-    else:
-        # Standalone mode: no comparison context
-        classification = "CURRENT_EVIDENCE"
-        reason = "Network observed in current discovery evidence."
-    
+
     evidence = next(
-        (item for item in current.networks 
+        (item for item in current.networks
          if str(ipaddress.ip_network(item.cidr, strict=False)) == canonical),
         None
     )
+    observed = evidence is not None
+
+    if report is not None:
+        finding = _finding(canonical, report)
+        if finding is not None:
+            classification = finding.classification
+            reason = _reason(finding)
+        else:
+            # Comparison context covers a different scope than the current
+            # snapshot: classification follows what the CURRENT evidence
+            # actually shows, never an assumed observation.
+            classification = "CURRENT_EVIDENCE" if observed else "NOT_OBSERVED"
+            reason = _reason(None, observed)
+    else:
+        # Standalone mode: no comparison context.
+        if observed:
+            classification = "CURRENT_EVIDENCE"
+            reason = _reason(None, observed)
+        else:
+            classification = "NOT_OBSERVED"
+            reason = _reason(None, observed)
+
     routes = _route_evidence(canonical, current)
     
     # Get transit evidence if available
