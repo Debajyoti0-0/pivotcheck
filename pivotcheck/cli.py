@@ -31,6 +31,7 @@ Exit codes (deliberate contract for shell automation):
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import re
 import sys
@@ -61,6 +62,7 @@ from pivotcheck.checks.context import (
 )
 from pivotcheck.checks.proxy import check_proxy, parse_proxy_url
 from pivotcheck.checks.resolver import resolve_target, validate_target
+from pivotcheck.checks.ssh import validate_ssh_auth
 from pivotcheck.checks.tcp import check_tcp, validate_port, validate_timeout
 from pivotcheck.discovery.engine import run_discovery
 from pivotcheck.discovery.ssh import (
@@ -74,6 +76,7 @@ from pivotcheck.models.check import (
     CheckResult,
     CheckStatus,
 )
+from pivotcheck.models.credentials import CredentialType
 from pivotcheck.models.proxy_check import (
     ProxyCheckReport,
     ProxyEndpoint,
@@ -81,6 +84,10 @@ from pivotcheck.models.proxy_check import (
     ProxyStageStatus,
 )
 from pivotcheck.models.result import DiscoverySnapshot
+from pivotcheck.models.ssh_check import (
+    SSHCheckReport,
+    SSHCheckStatus,
+)
 from pivotcheck.output.artifact import write_json_artifact
 from pivotcheck.output.check_output import render_check, render_check_json
 from pivotcheck.output.comparison import (
@@ -100,6 +107,7 @@ from pivotcheck.output.proxy_check import (
     render_proxy_check,
     render_proxy_check_json,
 )
+from pivotcheck.output.ssh_check import render_ssh_check, render_ssh_check_json
 from pivotcheck.output.terminal import render_detailed, should_use_color
 from pivotcheck.output.writer import text_stream
 from pivotcheck.storage.baseline_store import (
@@ -264,6 +272,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="attach comparison context relative to a saved baseline "
         "(loads the baseline, performs one current discovery, and reports "
         "how the target's network relates to the saved perspective)",
+    )
+    check.add_argument(
+        "--protocol",
+        choices=["tcp", "ssh"],
+        default="tcp",
+        help="validation protocol: tcp (default) performs one explicit "
+        "TCP connection per listed port; ssh performs one public-key "
+        "authentication attempt against one target:port using a "
+        "credential supplied via --ssh-key-env",
+    )
+    check.add_argument(
+        "--ssh-user",
+        help="SSH username (SSH protocol only; defaults to the current "
+        "OS user, matching ssh client behavior)",
+    )
+    check.add_argument(
+        "--ssh-key-env",
+        metavar="VARIABLE",
+        help="environment variable holding SSH private-key material "
+        "(SSH protocol only; required for --protocol ssh). The value is "
+        "never printed, logged, or persisted.",
+    )
+    check.add_argument(
+        "--ssh-accept-new-hostkeys",
+        action="store_true",
+        help="SSH protocol only: trust first-contact host keys "
+        "(trust-on-first-use); changed keys are still rejected. "
+        "Default: strict known_hosts verification.",
     )
     _add_output_args(check)
 
@@ -582,6 +618,8 @@ def _load_baseline_for_check(args: argparse.Namespace):
 
 def _run_check(args: argparse.Namespace) -> int:
     """Execute a controlled reachability check. Returns a process exit code."""
+    if getattr(args, "protocol", "tcp") == "ssh":
+        return _run_check_ssh(args)
     ports = _parse_ports(args.port)
     if ports is None:
         print("[-] Invalid --port value.", file=sys.stderr)
@@ -732,6 +770,117 @@ def _parse_single_port(port_arg: str) -> int | None:
         return validate_port(int(token))
     except ValueError:
         return None
+
+
+def _run_check_ssh(args: argparse.Namespace) -> int:
+    """Execute ONE SSH public-key authentication validation.
+
+    Exit codes mirror the documented check contract:
+        0 — validation executed; AUTHENTICATED / AUTH_FAILED / TIMEOUT /
+            HOST_KEY_UNVERIFIED are data, not CLI failures
+        1 — fatal internal/local execution failure
+        2 — invalid CLI usage (port, timeout, missing/invalid env var)
+        3 — target could not be resolved
+    """
+    if getattr(args, "baseline", None):
+        print(
+            "[-] --baseline is not supported for --protocol ssh: baseline "
+            "comparison is passive-topology context and does not apply to "
+            "an active authentication attempt.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    port = _parse_single_port(args.port)
+    if port is None:
+        print("[-] Invalid --port value for SSH validation.", file=sys.stderr)
+        print(
+            "    SSH validation is one target, one port: --port 22 (or one "
+            "explicit port). Lists and ranges are deliberately not supported.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        timeout_s = validate_timeout(args.timeout)
+    except ValueError as exc:
+        print(f"[-] Invalid --timeout: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    env_name = getattr(args, "ssh_key_env", None)
+    if not env_name:
+        print(
+            "[-] --protocol ssh requires --ssh-key-env VARIABLE holding the "
+            "private-key material (command-line key material is deliberately "
+            "not accepted; command lines are observable to other users).",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if not _validate_env_var_name(env_name):
+        print(f"[-] Invalid environment variable name: {env_name!r}", file=sys.stderr)
+        return EXIT_USAGE
+
+    from pivotcheck.utils.credential_loader import CredentialLoadError, load_credential
+
+    username = args.ssh_user or getpass.getuser()
+    try:
+        credential = load_credential(CredentialType.SSH_PRIVATE_KEY, env_name, username=username)
+    except CredentialLoadError as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    host = args.target
+
+    connect_timeout = min(timeout_s, 60.0)
+    try:
+        config = SSHConfig(
+            host=host,
+            port=port,
+            user=username,
+            connect_timeout=connect_timeout,
+            command_timeout=timeout_s,
+            host_key_policy=(
+                HostKeyPolicy.ACCEPT_NEW if args.ssh_accept_new_hostkeys else HostKeyPolicy.STRICT
+            ),
+        )
+    except SSHConfigError as exc:
+        # Message carries the invalid host string, never credential material.
+        print(f"[-] Invalid SSH target: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        result = validate_ssh_auth(config, credential)
+    except ValueError as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    import socket as _socket
+    import uuid
+    from datetime import datetime, timezone
+
+    report = SSHCheckReport(
+        target=config.host,
+        port=port,
+        timeout_s=timeout_s,
+        results=(result,),
+        command="check",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        perspective_hostname=_socket.gethostname(),
+        perspective_session_id=uuid.uuid4().hex[:16],
+    )
+    stream = sys.stdout
+    if args.format == "json" or args.json:
+        render_ssh_check_json(report, stream)
+    else:
+        color = should_use_color(sys.stdout, args.no_color)
+        render_ssh_check(report, stream, color=color)
+
+    if result.status in (
+        SSHCheckStatus.INVALID_TARGET,
+        SSHCheckStatus.DNS_ERROR,
+    ):
+        return EXIT_RESOLVE
+    if result.status is SSHCheckStatus.LOCAL_ERROR:
+        return EXIT_FATAL
+    return EXIT_OK
 
 
 def _redact_credentials(text: str) -> str:

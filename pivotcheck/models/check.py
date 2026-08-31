@@ -551,6 +551,7 @@ class CheckReport:
     results: tuple[CheckResult, ...]
     validation_context: ValidationContext | None = None
     command: str = "check"
+    protocol: str = "tcp"  # additive (schema 1.1): which check protocol ran
     schema_version: str = "1.1"
     timestamp: str = ""
     perspective_hostname: str = ""
@@ -562,6 +563,7 @@ class CheckReport:
             "tool": "pivotcheck",
             "version": _version(),
             "command": self.command,
+            "protocol": self.protocol,
             "timestamp": self.timestamp,
             "perspective": {
                 "hostname": self.perspective_hostname,

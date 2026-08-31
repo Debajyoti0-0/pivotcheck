@@ -14,6 +14,7 @@ from pivotcheck.checks.context import (
     resolve_priority_context,
 )
 from pivotcheck.checks.resolver import resolve_target, validate_target
+from pivotcheck.checks.ssh import validate_ssh_auth
 from pivotcheck.checks.tcp import check_tcp, classify_socket_error
 
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     "resolve_network_match",
     "resolve_priority_context",
     "resolve_target",
+    "validate_ssh_auth",
     "validate_target",
 ]
