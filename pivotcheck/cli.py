@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import ipaddress
 import os
 import re
 import sys
@@ -1674,8 +1675,33 @@ def _run_next(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _validate_network_argument(network: str) -> int | None:
+    """Validate a network CLI argument against the canonical CIDR model.
+
+    Returns ``None`` when the argument is valid, otherwise ``EXIT_USAGE``
+    after printing the standard operator error. Validation is pure: invalid
+    input fails before discovery (no filesystem, network, or subprocess
+    side effects), and the original argument is passed through to analysis
+    unchanged, so valid-path behavior is byte-identical.
+    """
+    try:
+        ipaddress.ip_network(network, strict=False)
+    except ValueError:
+        print(f"[-] Invalid network argument: {network!r}.", file=sys.stderr)
+        print(
+            "    Provide a CIDR network (e.g. 10.50.0.0/16) or an IP address.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    return None
+
+
 def _run_gaps(args: argparse.Namespace) -> int:
     """Execute evidence gap analysis."""
+    error = _validate_network_argument(args.network)
+    if error is not None:
+        return error
+
     # Run discovery once
     try:
         snapshot = run_discovery()
@@ -1700,6 +1726,10 @@ def _run_gaps(args: argparse.Namespace) -> int:
 
 def _run_explain(args: argparse.Namespace) -> int:
     """Execute standalone network explanation."""
+    error = _validate_network_argument(args.network)
+    if error is not None:
+        return error
+
     # If the operator explicitly requested contextual baseline analysis,
     # load the baseline BEFORE any discovery or socket activity. A missing
     # or invalid baseline fails explicitly rather than silently performing

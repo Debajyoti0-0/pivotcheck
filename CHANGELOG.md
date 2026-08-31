@@ -2,6 +2,20 @@
 
 All notable changes to PivotCheck are documented in this file.
 
+## [2.0.2] — 2026-08-31
+
+### Fixed
+
+- `gaps` and `explain` no longer crash with a raw Python traceback when the
+  network argument is not a valid CIDR or IP address (for example
+  `gaps 999.999.1.0/24` or `explain not-a-cidr`). Invalid input now fails
+  through the standard CLI error contract: a clean `[-]` message on stderr,
+  exit code 2, an empty stdout (JSON output emits no partial artifact), and
+  no discovery or other side effects. Valid CIDR, bare-IP, host-bit, and
+  IPv6 behavior is unchanged. Found during Stage 9 release-consumer
+  validation against the public 2.0.0 artifact; still present in the
+  published 2.0.1, which shipped before this fix existed.
+
 ## [2.0.1] — 2026-08-31
 
 ### Fixed

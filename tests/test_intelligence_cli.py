@@ -268,3 +268,101 @@ class TestDiscoverSummary:
         assert "Connected Coverage: 1" in out
         assert "Routed Coverage: 2" in out
         assert "Inferred Pivot Paths: 1" in out
+
+
+class TestNetworkArgumentValidation:
+    """Stage 9 DEFECT-002 regression: invalid network arguments must follow
+    the established CLI error contract (clean `[-]` message on stderr, no
+    Python traceback, EXIT_USAGE, no partial output, no side effects).
+
+    These tests fail against the defective 2.0.0 implementation, which
+    leaked an uncaught ValueError traceback from models/network.py and
+    exited 1.
+    """
+
+    BAD_NETWORKS = (
+        "not-a-cidr",
+        "999.999.1.0/24",  # malformed IPv4 octets
+        "10.0.0.0/33",  # invalid IPv4 prefix length
+        "10.0.0.0/120",  # IPv6 prefix length applied to IPv4
+        "10.0.0.0/24/24",  # double prefix
+        "2001:db8::/wxyz",  # malformed IPv6 prefix
+    )
+
+    @pytest.fixture(autouse=True)
+    def fake_discovery(self, monkeypatch):
+        from pivotcheck import cli
+
+        monkeypatch.setattr(cli, "run_discovery", make_snapshot)
+
+    @pytest.mark.parametrize("bad", BAD_NETWORKS)
+    def test_gaps_invalid_network_is_usage_error(self, bad, capsys):
+        assert _run(["gaps", bad]) == EXIT_USAGE
+        err = capsys.readouterr().err
+        assert "Invalid network argument" in err
+        assert "Traceback" not in err
+        assert "ValueError" not in err
+
+    @pytest.mark.parametrize("bad", BAD_NETWORKS)
+    def test_explain_invalid_network_is_usage_error(self, bad, capsys):
+        assert _run(["explain", bad]) == EXIT_USAGE
+        err = capsys.readouterr().err
+        assert "Invalid network argument" in err
+        assert "Traceback" not in err
+
+    @pytest.mark.parametrize("bad", BAD_NETWORKS)
+    def test_invalid_network_json_path_has_no_partial_result(self, bad, capsys):
+        for command in ("gaps", "explain"):
+            assert _run([command, bad, "--json"]) == EXIT_USAGE
+            captured = capsys.readouterr()
+            # No partial JSON artifact may pretend the request succeeded.
+            assert captured.out.strip() == ""
+            assert "Traceback" not in captured.err
+
+    def test_invalid_network_fails_before_discovery(self, monkeypatch, capsys):
+        """Invalid input must produce zero side effects: discovery (and any
+        I/O behind it) must never run for an invalid network argument."""
+        from pivotcheck import cli
+
+        def _must_not_run(*_args, **_kwargs):
+            raise AssertionError("discovery must not run for invalid input")
+
+        monkeypatch.setattr(cli, "run_discovery", _must_not_run)
+        assert _run(["gaps", "not-a-cidr"]) == EXIT_USAGE
+        assert "Invalid network argument" in capsys.readouterr().err
+
+    def test_valid_cidr_behavior_unchanged(self, capsys):
+        assert _run(["gaps", "10.50.0.0/16"]) == EXIT_OK
+        out = capsys.readouterr().out
+        assert "10.50.0.0/16" in out
+        assert "EVIDENCE GAP" in out
+
+    def test_bare_ip_still_valid(self, capsys):
+        assert _run(["explain", "10.50.5.1"]) == EXIT_OK
+        assert "10.50.0.0/16" in capsys.readouterr().out
+
+    def test_host_bits_set_still_accepted(self, capsys):
+        # strict=False semantics are preserved: host bits are normalized,
+        # exactly as in 2.0.0.
+        assert _run(["gaps", "10.50.5.1/16"]) == EXIT_OK
+
+    def test_ipv6_cidr_still_valid(self, capsys):
+        assert _run(["explain", "2001:db8:a::/48"]) == EXIT_OK
+        out = capsys.readouterr().out
+        assert "2001:db8:a::/48" in out
+        assert "CURRENT_EVIDENCE" in out
+
+    def test_explain_unobserved_network_is_not_observed(self, capsys):
+        """Stage 9 DEFECT-001 regression at the CLI boundary: absence of
+        observation must never be promoted to CURRENT_EVIDENCE. Fails
+        against 2.0.0, which reported CURRENT_EVIDENCE here."""
+        assert _run(["explain", "192.168.99.0/24"]) == EXIT_OK
+        out = capsys.readouterr().out
+        assert "NOT_OBSERVED" in out
+        assert "CURRENT_EVIDENCE" not in out
+
+    def test_explain_unobserved_network_json_classification(self, capsys):
+        assert _run(["explain", "192.168.99.0/24", "--json"]) == EXIT_OK
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["classification"] == "NOT_OBSERVED"
+        assert payload["reason"] == "Network not found in current discovery evidence."

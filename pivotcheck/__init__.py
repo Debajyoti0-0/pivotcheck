@@ -3,4 +3,4 @@
 Copyright (c) 2026 PivotCheck contributors. GPL-3.0-only licensed.
 """
 
-__version__ = "2.0.1"
+__version__ = "2.0.2"
