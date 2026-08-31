@@ -35,11 +35,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
-
-from typing_extensions import Self
+from typing import TYPE_CHECKING, Protocol
 
 from pivotcheck.utils.system import CommandResult
+
+if TYPE_CHECKING:
+    # Type-checking only: typing_extensions is NOT a runtime dependency.
+    from typing_extensions import Self
 
 LOG = logging.getLogger(__name__)
 
