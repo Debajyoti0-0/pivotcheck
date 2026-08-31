@@ -2,6 +2,45 @@
 
 All notable changes to PivotCheck are documented in this file.
 
+## [Unreleased]
+
+### Added — 2.0 development line (Steps 1–7)
+
+- **Credential abstraction** — typed credential model (password, NTLM
+  hash, SSH private key, Kerberos ticket) with secret-safe
+  representation (`secret=[REDACTED]` in every string form; `secret_present`
+  instead of material in JSON) and an explicit environment loader that
+  reads exactly one named variable, never enumerates the environment,
+  and never persists values.
+- **SSH validation** — one public-key authentication attempt against one
+  operator-specified target:port via the system OpenSSH client; strict
+  host-key verification; server-identity verification reported separately
+  from authentication success.
+- **SMB validation** — one NTLM session-setup attempt against one
+  operator-specified target:port via the optional `smb` extra
+  (smbprotocol); guest fallback refused by construction; no share
+  enumeration or execution. NTLM hash pass-the-hash is honestly
+  unsupported by the current backend.
+- **WinRM validation** — one WS-Man authentication attempt (read-only
+  Get on the service configuration resource — no shell, no command)
+  against one operator-specified target:port via the optional `winrm`
+  extra (pywinrm); HTTPS certificate verification always on.
+- **Credential/host correlation** — pure analysis ranking credential/host
+  validation candidates from evidence, with explicit negative and
+  contradictory-evidence handling.
+- **Multi-hop graph intelligence** — evidence-bounded directed graph over
+  normalized discovery evidence with bounded simple-path discovery;
+  path status describes evidence composition (never capability).
+- **OPSEC intelligence** (`opsec --action ACTION --platform PLATFORM`) —
+  predictive analysis of the telemetry a validation action is reasonably
+  expected to produce on Windows/Linux. Predictive only: PivotCheck does
+  not observe target telemetry and provides no evasion, suppression, or
+  security-control bypass guidance.
+
+All validation capabilities enforce one target, one port, one credential,
+one attempt — no scanning, retries, fallback chains, or execution.
+Optional extras keep the runtime core dependency-free.
+
 ## [1.0.0] — 2026-08-30
 
 Initial stable public release.

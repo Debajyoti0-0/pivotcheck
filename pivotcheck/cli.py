@@ -412,6 +412,29 @@ def build_parser() -> argparse.ArgumentParser:
     _add_output_args(comparison)
     _add_filter_args(comparison, changes_only=True, minimum_confidence=True)
 
+    opsec_cmd = sub.add_parser(
+        "opsec",
+        help="describe the likely observability of an explicit validation action",
+        description=(
+            "Predictive OPSEC analysis: describes the telemetry an explicit "
+            "validation action is reasonably expected to produce on a "
+            "platform. This is NOT observed telemetry from a target and "
+            "provides no evasion guidance."
+        ),
+    )
+    opsec_cmd.add_argument(
+        "--action",
+        required=True,
+        help="the action to analyze: ssh-auth, smb-auth, winrm-auth, "
+        "tcp-connect, socks5-connect",
+    )
+    opsec_cmd.add_argument(
+        "--platform",
+        required=True,
+        help="platform where telemetry is expected: windows, linux, macos",
+    )
+    _add_output_args(opsec_cmd)
+
     # Comparison views are deliberately mutually exclusive: each answers a
     # different operator question. Filters (--interface/--family/etc.)
     # compose with any view.
@@ -1150,6 +1173,33 @@ def _run_check_winrm(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _run_opsec(args: argparse.Namespace) -> int:
+    """Execute predictive OPSEC analysis for one action/platform pair.
+
+    Exit codes:
+        0 — analysis produced (including UNKNOWN: that is an answer)
+        2 — invalid CLI usage (unknown action/platform)
+    """
+    from pivotcheck.analysis.opsec import assess_opsec, parse_action, parse_platform
+    from pivotcheck.output.opsec import render_opsec, render_opsec_json
+
+    try:
+        action = parse_action(args.action)
+        platform = parse_platform(args.platform)
+    except ValueError as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    result = assess_opsec(action, platform)
+    stream = sys.stdout
+    if args.format == "json" or args.json:
+        render_opsec_json(result, stream)
+    else:
+        color = should_use_color(sys.stdout, args.no_color)
+        render_opsec(result, stream, color=color)
+    return EXIT_OK
+
+
 def _run_proxy_check(args: argparse.Namespace) -> int:
     """Execute one operator-controlled SOCKS5 proxy-path validation.
 
@@ -1722,6 +1772,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "proxy-check":
         return _run_proxy_check(args)
+
+    if args.command == "opsec":
+        return _run_opsec(args)
 
     if args.command == "baseline":
         return _run_baseline(args)

@@ -124,6 +124,11 @@ Four validation capabilities, all strictly operator-directed:
   chains, no execution — authentication only.
 - **SOCKS5 CONNECT** (`proxy-check`) — one proxy, one destination, one
   port, one attempt. Hostnames are resolved by the proxy, never locally.
+- **OPSEC intelligence** (`opsec --action ACTION --platform PLATFORM`) —
+  predictive analysis of the telemetry a validation action is reasonably
+  expected to produce on a platform (Windows/Linux). Predictive only: it
+  never observes target telemetry, never guarantees events, and provides
+  no evasion guidance.
 
 UDP is deliberately not supported: no response is not evidence of
 unreachability, and PivotCheck does not make claims it cannot support.
