@@ -81,4 +81,4 @@ For security reports, use the GitHub security advisory feature at
 
 ---
 
-*This policy applies to PivotCheck v1.0.0 and subsequent versions unless superseded.*
+*This policy applies to PivotCheck v2.0.0 and subsequent versions unless superseded.*

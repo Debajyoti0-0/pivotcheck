@@ -152,7 +152,7 @@ schema and provenance fields:
 {
   "schema_version": "1.1",
   "tool": "pivotcheck",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "command": "next",
   "candidate": null,
   "message": "NO INVESTIGATION CANDIDATES"
