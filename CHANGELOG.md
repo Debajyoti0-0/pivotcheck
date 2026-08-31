@@ -2,32 +2,42 @@
 
 All notable changes to PivotCheck are documented in this file.
 
-## [Unreleased]
+## [2.0.0] — 2026-08-31
 
-### Added — 2.0 development line (Steps 1–7)
+The 2.0 release turns PivotCheck into a cross-platform, evidence-driven
+credential/path validation platform — while preserving every v1.0.0
+invariant: passive analysis does no network I/O, active validation stays
+one target / one port / one credential / one attempt, and possession of a
+credential never implies that it works.
+
+### Added
 
 - **Credential abstraction** — typed credential model (password, NTLM
-  hash, SSH private key, Kerberos ticket) with secret-safe
-  representation (`secret=[REDACTED]` in every string form; `secret_present`
-  instead of material in JSON) and an explicit environment loader that
-  reads exactly one named variable, never enumerates the environment,
-  and never persists values.
-- **SSH validation** — one public-key authentication attempt against one
-  operator-specified target:port via the system OpenSSH client; strict
-  host-key verification; server-identity verification reported separately
+  hash, SSH private key, Kerberos ticket) with secret-safe representation
+  (`secret=[REDACTED]` in every string form; `secret_present` instead of
+  material in JSON) and an explicit environment loader that reads exactly
+  one named variable, never enumerates the environment, and never
+  persists values.
+- **SSH validation** (`check --protocol ssh`) — one public-key
+  authentication attempt against one operator-specified target:port via
+  the system OpenSSH client; strict host-key verification (accept-new is
+  an explicit opt-in); server-identity verification reported separately
   from authentication success.
-- **SMB validation** — one NTLM session-setup attempt against one
-  operator-specified target:port via the optional `smb` extra
-  (smbprotocol); guest fallback refused by construction; no share
-  enumeration or execution. NTLM hash pass-the-hash is honestly
-  unsupported by the current backend.
-- **WinRM validation** — one WS-Man authentication attempt (read-only
-  Get on the service configuration resource — no shell, no command)
-  against one operator-specified target:port via the optional `winrm`
-  extra (pywinrm); HTTPS certificate verification always on.
+- **SMB validation** (`check --protocol smb`) — one NTLM session-setup
+  attempt against one operator-specified target:port via the optional
+  `smb` extra (smbprotocol); guest fallback refused by construction; no
+  share enumeration or execution. NTLM hash pass-the-hash is honestly
+  unsupported by the current backend and returns
+  `UNSUPPORTED_CREDENTIAL`.
+- **WinRM validation** (`check --protocol winrm`) — one WS-Man
+  authentication attempt (a read-only Get on the service configuration
+  resource — no shell, no command) against one operator-specified
+  target:port via the optional `winrm` extra (pywinrm); HTTPS
+  certificate verification always on; TLS failures are distinct from
+  authentication failures.
 - **Credential/host correlation** — pure analysis ranking credential/host
   validation candidates from evidence, with explicit negative and
-  contradictory-evidence handling.
+  contradictory-evidence handling and deterministic ordering.
 - **Multi-hop graph intelligence** — evidence-bounded directed graph over
   normalized discovery evidence with bounded simple-path discovery;
   path status describes evidence composition (never capability).
@@ -36,10 +46,32 @@ All notable changes to PivotCheck are documented in this file.
   expected to produce on Windows/Linux. Predictive only: PivotCheck does
   not observe target telemetry and provides no evasion, suppression, or
   security-control bypass guidance.
+- **Windows/macOS discovery collectors** — the passive discovery engine
+  now works on Windows (`ipconfig`, `route print`, `arp`, `netstat`,
+  `tasklist`) and macOS (`ifconfig`, `netstat`, `arp`, `scutil`), sharing
+  the same normalized evidence contract as Linux.
 
-All validation capabilities enforce one target, one port, one credential,
-one attempt — no scanning, retries, fallback chains, or execution.
-Optional extras keep the runtime core dependency-free.
+### Changed
+
+- `check --protocol` now accepts `tcp` (default), `ssh`, `smb`, and
+  `winrm`; credential material is supplied only via environment
+  variables (`--ssh-key-env`, `--credential-env`) — never command-line
+  arguments. The default TCP path is unchanged.
+- Check JSON envelopes gain an additive `protocol` field (schema 1.1).
+- Optional extras `smb` (smbprotocol) and `winrm` (pywinrm) were added;
+  the runtime core remains dependency-free.
+
+### Security
+
+- All validation capabilities enforce one target, one port, one
+  credential, one attempt — no scanning, retries, fallback chains, share
+  enumeration, or command execution.
+- Credential material is structurally excluded from every string and
+  serialized representation and stripped defensively from third-party
+  error text.
+- Guest-session fallback is refused by construction for SMB.
+- OPSEC intelligence is predictive analysis only and provides no evasion,
+  suppression, or security-control bypass guidance.
 
 ## [1.0.0] — 2026-08-30
 

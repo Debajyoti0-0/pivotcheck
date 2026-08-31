@@ -30,8 +30,9 @@ next. It does not scan, and it does not claim reachability without evidence.
 - **What should I investigate next?** One evidence-backed candidate,
   selected deterministically — or nothing, if the evidence doesn't
   support one.
-- **What actually works?** Only the explicit target and port you choose
-  get validated: one TCP connect or one SOCKS5 CONNECT, per command.
+- **What actually works?** Only the explicit target, port, and credential
+  you choose get validated: one SSH, SMB, or WinRM authentication attempt,
+  one TCP connect, or one SOCKS5 CONNECT — per command.
 
 ## Features
 
@@ -41,8 +42,13 @@ next. It does not scan, and it does not claim reachability without evidence.
 - Evidence-gap analysis with a six-state evidence model
 - Candidate explanation: full evidence → inference → priority chain
 - Baseline snapshots and deterministic comparison
-- Explicit TCP and SOCKS5 CONNECT validation, one target at a time
+- Explicit validation, one target at a time: TCP, SSH public-key, SMB
+  NTLM session setup (optional extra), SOCKS5 CONNECT
+- WinRM authentication validation (optional extra) — read-only WS-Man
+  probe; no shells, no commands
 - Remote collection over SSH using your existing agent and keys
+- OPSEC intelligence: predictive observability analysis for validation
+  actions (no evasion guidance)
 - Stable, deterministic JSON output on every command
 
 ## Installation

@@ -35,10 +35,12 @@ Structured errors: `RemoteSessionError` with `SessionConnectError`,
 `SessionTimeoutError`, and `SessionCleanupError`. Misuse (execute before
 connect / after close) is a structured error, never silent.
 
-Implemented transports: **SSH only** (`SSHSession`, over the system
-OpenSSH client). WinRM, WMI, and SMB are **planned for Phase 4 and not
-currently available**; they will be required to pass the same lifecycle
-contract tests (`tests/remote_session_contract.py`) before release.
+Implemented transports: **SSH** (`SSHSession`, over the system OpenSSH
+client). The SMB and WinRM active-check backends (smbprotocol / pywinrm)
+do not use this session layer — they are direct single-shot authentication
+validators under `checks/` with their own lifecycle (`connect → probe →
+disconnect` in one call, guaranteed cleanup in `finally`). WMI transport
+remains planned and not currently available.
 
 ## Architecture
 
