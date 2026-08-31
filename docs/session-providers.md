@@ -5,6 +5,41 @@ the transport that obtains raw observation data from that vantage point;
 everything downstream (parsers, analysis, comparison, map view, rendering)
 is provider-agnostic.
 
+## RemoteSession architecture (v2.0)
+
+Every remote transport implements one lifecycle contract, defined in
+`pivotcheck/discovery/remote.py`:
+
+```text
+CREATE -> CONNECT -> EXECUTE -> (COLLECT) -> CLOSE -> DESTROY
+```
+
+```text
+explicit operator target
+        |
+RemoteSessionConfig  (metadata only; credential_material never stored)
+        |
+RemoteSession         <- transport contract: connect / execute / close
+        |                (context-manager: cleanup is guaranteed, even on
+        |                 failure; cleanup failures never mask the original
+        |                 error)
+RemoteCollector       <- named fixed-argv command specs -> parsers
+        |
+CollectedDiscoveryData
+        |
+run_discovery()       (analysis, unchanged)
+```
+
+Structured errors: `RemoteSessionError` with `SessionConnectError`,
+`SessionAuthenticationError`, `SessionExecutionError`,
+`SessionTimeoutError`, and `SessionCleanupError`. Misuse (execute before
+connect / after close) is a structured error, never silent.
+
+Implemented transports: **SSH only** (`SSHSession`, over the system
+OpenSSH client). WinRM, WMI, and SMB are **planned for Phase 4 and not
+currently available**; they will be required to pass the same lifecycle
+contract tests (`tests/remote_session_contract.py`) before release.
+
 ## Architecture
 
 ```text

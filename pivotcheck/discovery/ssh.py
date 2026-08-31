@@ -22,9 +22,11 @@ Security contract:
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -36,11 +38,20 @@ from pivotcheck.discovery.provider import (
     CollectedDiscoveryData,
     ProviderError,
 )
+from pivotcheck.discovery.remote import (
+    RemoteSessionError,
+    RemoteSessionMixin,
+    SessionConnectError,
+    SessionExecutionError,
+    SessionTimeoutError,
+)
 from pivotcheck.discovery.routes import collect_routes
 from pivotcheck.models.network import DNSConfig
 from pivotcheck.models.result import DiscoveryWarning
 from pivotcheck.models.session import SessionIdentity
 from pivotcheck.utils.system import CommandResult
+
+LOG = logging.getLogger(__name__)
 
 _SSH_BINARY = "ssh"
 _HOST_RE = re.compile(
@@ -146,6 +157,83 @@ class SSHExecutor:
         return CommandResult(proc.returncode, proc.stdout, proc.stderr)
 
 
+class SSHSession(RemoteSessionMixin):
+    """RemoteSession implementation over the system OpenSSH client.
+
+    Lifecycle semantics for the SSH transport: the OpenSSH client opens a
+    connection per executed command, so ``connect()`` validates the
+    transport (client binary availability) without emitting any network
+    traffic, and ``close()`` finalizes the logical session. Every command
+    runs through :class:`SSHExecutor`, which enforces fixed argv, the
+    configured timeouts, and strict host-key policy.
+
+    ``run`` exposes the full :class:`CommandResult` (returncode + stderr)
+    for collectors that need it; the protocol-level ``execute`` returns
+    stdout only. Both are available; neither changes v1 observable
+    behavior.
+    """
+
+    def __init__(self, executor: Callable[[list[str]], CommandResult]) -> None:
+        super().__init__()
+        self._executor = executor
+
+    def _executor_call(self, command: list[str]) -> CommandResult:
+        return self._executor(list(command))
+
+    def _do_connect(self) -> None:
+        if (
+            isinstance(self._executor, SSHExecutor)
+            and getattr(self._executor, "_binary", None) is None
+        ):
+            # SSHExecutor validates binary availability at construction; a
+            # missing client is a connect-stage failure for this transport.
+            raise SessionConnectError("the OpenSSH client is not available")
+        target = self._describe_target()
+        LOG.debug("SSH session connect: %s", target)
+
+    def _do_execute(self, command) -> str:
+        if not command or not all(isinstance(token, str) for token in command):
+            raise SessionExecutionError("remote commands must be string argv sequences")
+        LOG.debug("SSH remote command: %s", command[0] if command else "(empty)")
+        try:
+            result = self._executor_call(list(command))
+        except SSHProviderError as exc:
+            if exc.kind == "timeout":
+                raise SessionTimeoutError(str(exc).replace(f"{exc.kind}: ", "", 1)) from exc
+            raise SessionExecutionError(str(exc)) from exc
+        return result.stdout
+
+    def run(self, command: list[str]) -> CommandResult:
+        """Full-result execution for rc-aware collectors (compatibility)."""
+        self._require_open()
+        self.calls.append(command[0] if command else "")
+        try:
+            return self._executor_call(list(command))
+        except RemoteSessionError:
+            raise
+        except SSHProviderError as exc:
+            if exc.kind == "timeout":
+                raise SessionTimeoutError(str(exc).replace(f"{exc.kind}: ", "", 1)) from exc
+            raise SessionExecutionError(str(exc)) from exc
+        except Exception as exc:
+            raise SessionExecutionError(str(exc)) from exc
+
+    def __call__(self, command: list[str]) -> CommandResult:
+        """Executor-callable compatibility: collectors invoke the session
+        exactly like the raw SSHExecutor they previously received."""
+        return self.run(command)
+
+    def _do_close(self) -> None:
+        LOG.debug("SSH session closed: %s", self._describe_target())
+
+    def _describe_target(self) -> str:
+        config = getattr(self._executor, "_config", None)
+        host = getattr(config, "host", "unknown")
+        port = getattr(config, "port", 22)
+        # Metadata only: never authentication material (none is ever held).
+        return f"{host}:{port} (auth: delegated to operator SSH config)"
+
+
 class SSHProvider:
     """Collect normalized discovery inputs from one remote vantage point."""
 
@@ -157,9 +245,21 @@ class SSHProvider:
     ) -> None:
         self._executor = SSHExecutor(config)
         self._label = label
+        self._transport: SSHSession | None = None
         if session is not None and session.provider != "ssh":
             raise ValueError("SSHProvider requires a session with provider='ssh'")
         self._session = session
+
+    def transport(self) -> SSHSession:
+        """Open a new logical SSHSession (factory).
+
+        Session ownership: the provider owns the transport; collectors only
+        execute through it. Each collection run opens a fresh session and
+        always closes it — a closed session is never reused (no zombie
+        connections). The most recently used session is retained on
+        ``_last_transport`` for inspection and testing.
+        """
+        return SSHSession(self._executor)
 
     def get_session(self) -> SessionIdentity:
         if self._session is not None:
@@ -186,11 +286,16 @@ class SSHProvider:
                 )
                 return None
 
-        interfaces = safe("interfaces", lambda: collect_interfaces(self._executor))
-        routes = safe("routes", lambda: collect_routes(self._executor))
-        neighbors = safe("neighbors", lambda: collect_neighbors(self._executor))
-        connections = safe("connections", lambda: collect_connections(self._executor))
-        dns_content = safe("dns", self._read_resolv_conf)
+        # Lifecycle guarantee: the session always closes, including when a
+        # collector raises; cleanup failures never mask the original error.
+        with self.transport() as session:
+            interfaces = safe("interfaces", lambda: collect_interfaces(session))
+            routes = safe("routes", lambda: collect_routes(session))
+            neighbors = safe("neighbors", lambda: collect_neighbors(session))
+            connections = safe("connections", lambda: collect_connections(session))
+            dns_content = safe("dns", lambda: self._read_resolv_conf(session))
+        self._last_transport = session
+
         dns = parse_resolv_conf(dns_content) if dns_content else DNSConfig()
 
         if all(
@@ -214,8 +319,8 @@ class SSHProvider:
             warnings=tuple(warnings),
         )
 
-    def _read_resolv_conf(self) -> str | None:
-        result = self._executor(["cat", "/etc/resolv.conf"])
+    def _read_resolv_conf(self, session: SSHSession) -> str | None:
+        result = session.run(["cat", "/etc/resolv.conf"])
         if result.returncode != 0:
             raise RuntimeError(
                 f"cat exited {result.returncode}: {result.stderr.strip()}"
