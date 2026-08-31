@@ -93,16 +93,18 @@ class Credential:
         if not isinstance(self.state, CredentialState):
             raise TypeError(f"invalid credential state: {self.state!r}")
         if self.credential_type is CredentialType.NTLM_HASH and not _NTLM_RE.match(
-            self.secret.strip()
+            self.secret
         ):
             raise ValueError(
-                "NTLM credential must be 32 hex chars (or LM:NT 32:32 hex)"
+                "NTLM credential must be 32 hex chars (or LM:NT 32:32 hex); "
+                "surrounding whitespace is not permitted (strip before storing)"
             )
         if self.credential_type is CredentialType.SSH_PRIVATE_KEY and not _PEM_KEY_RE.match(
-            self.secret.lstrip()
+            self.secret
         ):
             raise ValueError(
-                "SSH private key credential must contain a PEM private key header"
+                "SSH private key credential must begin with a PEM private key "
+                "header (no leading whitespace; strip before storing)"
             )
         domain_types = (CredentialType.NTLM_HASH, CredentialType.KERBEROS_TICKET)
         if self.credential_type not in domain_types and self.domain is not None:

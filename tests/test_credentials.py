@@ -76,6 +76,19 @@ class TestCredentialModel:
         with pytest.raises(ValueError, match="NTLM credential"):
             Credential(CredentialType.NTLM_HASH, "zz-not-hex-123456789012345678901")
 
+    def test_stored_material_validated_verbatim_regression(self):
+        """Validation must check exactly what is stored (no silent strip).
+
+        Regression: validation previously stripped whitespace before
+        matching while storing the raw value, so a whitespace-padded hash
+        validated but was stored padded. The loader strips; direct
+        construction must reject padded material.
+        """
+        with pytest.raises(ValueError, match="whitespace is not permitted"):
+            Credential(CredentialType.NTLM_HASH, f"  {NTLM_VALID}")
+        with pytest.raises(ValueError, match="no leading whitespace"):
+            Credential(CredentialType.SSH_PRIVATE_KEY, f"  {PEM_KEY}")
+
     def test_ssh_private_key_requires_pem_header(self):
         cred = Credential(CredentialType.SSH_PRIVATE_KEY, PEM_KEY)
         assert cred.credential_type is CredentialType.SSH_PRIVATE_KEY
