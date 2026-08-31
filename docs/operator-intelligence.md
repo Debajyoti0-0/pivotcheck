@@ -9,11 +9,39 @@
 | evidence/explain | yes | `analysis/explanation.py` | wiring |
 | recommendations | yes | `analysis/recommendation.py` | wiring |
 | inferred pivots | yes | map view query (`filter_map_view`) | wiring |
+| credential/host correlation | yes (Step 1 credentials + caller-supplied host evidence) | `analysis/correlation.py` | internal model (no CLI yet) |
 | output artifact | JSON result | `output/artifact.py` | wiring |
 
 `--warnings` is deferred: discovery warnings already appear in discovery data
 and do not describe a comparison result. Active scanning, SSH, credentials,
 and transport controls remain out of scope.
+
+## Credential/host correlation (v2.0 Step 3)
+
+`analysis/correlation.py` correlates Step 1 credential *references* with
+caller-supplied host evidence and ranks explicit-validation candidates.
+It is pure analysis: no network, subprocess, filesystem, or environment
+access; identical evidence in any input order produces an identical
+report.
+
+What it consumes: `CredentialRef` (type/provenance/state only — credential
+material never enters the layer) and `HostEvidence` records using kinds
+such as `KNOWN_HOST`, `SSH_SERVICE_OBSERVED`, `SSH_SERVICE_NOT_OBSERVED`
+(explicit negative), `NETWORK_OBSERVED`, `NEIGHBOR_OBSERVED`,
+`AUTH_VALIDATED`, `AUTH_FAILED`.
+
+What a candidate means: `HIGH`/`MEDIUM`/`LOW` is INVESTIGATION priority
+for explicit validation next — it is never a claim that the credential
+works, that the host is reachable, or that a service is listening.
+`KNOWN_HOST` is historical SSH client identity evidence only.
+`AUTH_VALIDATED`/`AUTH_FAILED` can only be consumed from real prior
+validation results (Step 2's checker); correlation never manufactures
+them. Pairs with a prior `AUTH_FAILED` (and no success) are suppressed
+from recommendations, and every candidate carries a reason chain stating
+what is known and what is not.
+
+No CLI surface yet: correlation is an internal analysis capability until a
+consumer phase requires one.
 
 ## CLI interaction matrix
 
