@@ -4,7 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.0.x   | ✅ Stable release  |
+| 2.0.x   | ✅ Stable release  |
+| 1.0.x   | ❌ Legacy, unsupported |
 
 ## Reporting a Vulnerability
 
