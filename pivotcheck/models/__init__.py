@@ -1,6 +1,12 @@
 """Normalized data models for PivotCheck."""
 
 from pivotcheck.models.baseline import Baseline, BaselineNetwork
+from pivotcheck.models.credentials import (
+    Credential,
+    CredentialSource,
+    CredentialState,
+    CredentialType,
+)
 from pivotcheck.models.network import (
     Confidence,
     Connection,
@@ -26,6 +32,10 @@ __all__ = [
     "Confidence",
     "Connection",
     "ConnectionProtocol",
+    "Credential",
+    "CredentialSource",
+    "CredentialState",
+    "CredentialType",
     "DNSConfig",
     "DNSServer",
     "DiscoveredNetwork",
