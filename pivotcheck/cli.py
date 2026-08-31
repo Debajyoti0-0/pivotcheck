@@ -65,6 +65,7 @@ from pivotcheck.checks.resolver import resolve_target, validate_target
 from pivotcheck.checks.smb import validate_smb_auth
 from pivotcheck.checks.ssh import validate_ssh_auth
 from pivotcheck.checks.tcp import check_tcp, validate_port, validate_timeout
+from pivotcheck.checks.winrm import validate_winrm_auth
 from pivotcheck.discovery.engine import run_discovery
 from pivotcheck.discovery.ssh import (
     HostKeyPolicy,
@@ -93,6 +94,10 @@ from pivotcheck.models.ssh_check import (
     SSHCheckReport,
     SSHCheckStatus,
 )
+from pivotcheck.models.winrm_check import (
+    WinRMCheckReport,
+    WinRMCheckStatus,
+)
 from pivotcheck.output.artifact import write_json_artifact
 from pivotcheck.output.check_output import render_check, render_check_json
 from pivotcheck.output.comparison import (
@@ -115,6 +120,7 @@ from pivotcheck.output.proxy_check import (
 from pivotcheck.output.smb_check import render_smb_check, render_smb_check_json
 from pivotcheck.output.ssh_check import render_ssh_check, render_ssh_check_json
 from pivotcheck.output.terminal import render_detailed, should_use_color
+from pivotcheck.output.winrm_check import render_winrm_check, render_winrm_check_json
 from pivotcheck.output.writer import text_stream
 from pivotcheck.storage.baseline_store import (
     BaselineExistsError,
@@ -281,14 +287,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument(
         "--protocol",
-        choices=["tcp", "ssh", "smb"],
+        choices=["tcp", "ssh", "smb", "winrm"],
         default="tcp",
         help="validation protocol: tcp (default) performs one explicit "
         "TCP connection per listed port; ssh performs one public-key "
         "authentication attempt against one target:port using a "
         "credential supplied via --ssh-key-env; smb performs one NTLM "
         "session-setup attempt against one target:port using a "
+        "credential supplied via --credential-env; winrm performs one "
+        "WS-Man authentication attempt against one target:port using a "
         "credential supplied via --credential-env",
+    )
+    check.add_argument(
+        "--winrm-user",
+        help="WinRM username (winrm protocol only; defaults to the "
+        "current OS user)",
+    )
+    check.add_argument(
+        "--winrm-transport",
+        choices=["http", "https"],
+        default="http",
+        help="WinRM transport scheme (winrm protocol only; default http). "
+        "HTTPS verifies server certificates and never silently downgrades.",
     )
     check.add_argument(
         "--ssh-user",
@@ -642,6 +662,8 @@ def _run_check(args: argparse.Namespace) -> int:
         return _run_check_ssh(args)
     if getattr(args, "protocol", "tcp") == "smb":
         return _run_check_smb(args)
+    if getattr(args, "protocol", "tcp") == "winrm":
+        return _run_check_winrm(args)
     ports = _parse_ports(args.port)
     if ports is None:
         print("[-] Invalid --port value.", file=sys.stderr)
@@ -1021,6 +1043,109 @@ def _run_check_smb(args: argparse.Namespace) -> int:
     ):
         return EXIT_RESOLVE
     if result.status is SMBCheckStatus.LOCAL_ERROR:
+        return EXIT_FATAL
+    return EXIT_OK
+
+
+def _run_check_winrm(args: argparse.Namespace) -> int:
+    """Execute ONE WinRM WS-Man authentication validation.
+
+    Exit codes mirror the documented check contract:
+        0 — validation executed; AUTHENTICATED / AUTH_FAILED / TIMEOUT /
+            TLS_FAILED / PROTOCOL_ERROR are data, not CLI failures
+        1 — fatal internal/local execution failure (e.g. backend absent)
+        2 — invalid CLI usage (port, timeout, missing/invalid env var)
+        3 — target could not be resolved
+    """
+    from pivotcheck.checks.winrm import WinRMBackendUnavailable
+    from pivotcheck.utils.credential_loader import CredentialLoadError, load_credential
+
+    if getattr(args, "baseline", None):
+        print(
+            "[-] --baseline is not supported for --protocol winrm: baseline "
+            "comparison is passive-topology context and does not apply to "
+            "an active authentication attempt.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    port = _parse_single_port(args.port)
+    if port is None:
+        print("[-] Invalid --port value for WinRM validation.", file=sys.stderr)
+        print(
+            "    WinRM validation is one target, one port: --port 5985 (or "
+            "one explicit port). Lists and ranges are deliberately not supported.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        timeout_s = validate_timeout(args.timeout)
+    except ValueError as exc:
+        print(f"[-] Invalid --timeout: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    env_name = getattr(args, "credential_env", None)
+    if not env_name:
+        print(
+            "[-] --protocol winrm requires --credential-env VARIABLE holding "
+            "the password material (command-line credential material is "
+            "deliberately not accepted; command lines are observable to "
+            "other users).",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if not _validate_env_var_name(env_name):
+        print(f"[-] Invalid environment variable name: {env_name!r}", file=sys.stderr)
+        return EXIT_USAGE
+
+    username = args.winrm_user or getpass.getuser()
+    try:
+        credential = load_credential(CredentialType.PASSWORD, env_name, username=username)
+    except CredentialLoadError as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    import socket as _socket
+    import uuid
+    from datetime import datetime, timezone
+
+    try:
+        result = validate_winrm_auth(
+            credential,
+            args.target,
+            port=port,
+            timeout=timeout_s,
+            transport_scheme=args.winrm_transport,
+        )
+    except WinRMBackendUnavailable as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_FATAL
+    except ValueError as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    report = WinRMCheckReport(
+        target=args.target,
+        port=port,
+        timeout_s=timeout_s,
+        results=(result,),
+        command="check",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        perspective_hostname=_socket.gethostname(),
+        perspective_session_id=uuid.uuid4().hex[:16],
+    )
+    stream = sys.stdout
+    if args.format == "json" or args.json:
+        render_winrm_check_json(report, stream)
+    else:
+        color = should_use_color(sys.stdout, args.no_color)
+        render_winrm_check(report, stream, color=color)
+
+    if result.status in (
+        WinRMCheckStatus.INVALID_TARGET,
+        WinRMCheckStatus.DNS_ERROR,
+    ):
+        return EXIT_RESOLVE
+    if result.status is WinRMCheckStatus.LOCAL_ERROR:
         return EXIT_FATAL
     return EXIT_OK
 
