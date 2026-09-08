@@ -42,7 +42,7 @@ kerberos = [
     "krb5>=0.10; platform_system != \"Windows\"",
 ]
 encrypt = ["cryptography>=42.0"]
-dev = ["ruff", "mypy", "cryptography>=42.0"]
+dev = ["ruff", "mypy", "cryptography>=42.0", "types-requests"]
 
 [project.scripts]
 pivotcheck = "pivotcheck.cli:main"
