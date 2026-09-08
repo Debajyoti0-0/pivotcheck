@@ -57,11 +57,14 @@ from pivotcheck.analysis.summary import (
     summarize_comparison,
     summarize_snapshot,
 )
+from pivotcheck.analysis.whatif import analyze_what_if
 from pivotcheck.checks.context import (
     build_validation_context,
     context_from_snapshot,
 )
+from pivotcheck.checks.http import check_http
 from pivotcheck.checks.proxy import check_proxy, parse_proxy_url
+from pivotcheck.checks.rdp import validate_rdp_observation
 from pivotcheck.checks.resolver import resolve_target, validate_target
 from pivotcheck.checks.smb import validate_smb_auth
 from pivotcheck.checks.ssh import validate_ssh_auth
@@ -80,11 +83,19 @@ from pivotcheck.models.check import (
     CheckStatus,
 )
 from pivotcheck.models.credentials import CredentialType
+from pivotcheck.models.http_check import (
+    HTTPCheckReport,
+    HTTPCheckStatus,
+)
 from pivotcheck.models.proxy_check import (
     ProxyCheckReport,
     ProxyEndpoint,
     ProxyStageName,
     ProxyStageStatus,
+)
+from pivotcheck.models.rdp_check import (
+    RDPCheckReport,
+    RDPCheckStatus,
 )
 from pivotcheck.models.result import DiscoverySnapshot
 from pivotcheck.models.smb_check import (
@@ -95,6 +106,7 @@ from pivotcheck.models.ssh_check import (
     SSHCheckReport,
     SSHCheckStatus,
 )
+from pivotcheck.models.whatif import HypotheticalRoute
 from pivotcheck.models.winrm_check import (
     WinRMCheckReport,
     WinRMCheckStatus,
@@ -106,6 +118,7 @@ from pivotcheck.output.comparison import (
     render_comparison,
 )
 from pivotcheck.output.evidence_gaps import render_gaps, render_gaps_json
+from pivotcheck.output.http_check import render_http_check, render_http_check_json
 from pivotcheck.output.intelligence import (
     render_explanation,
     render_recommendations,
@@ -118,9 +131,11 @@ from pivotcheck.output.proxy_check import (
     render_proxy_check,
     render_proxy_check_json,
 )
+from pivotcheck.output.rdp_check import render_rdp_check, render_rdp_check_json
 from pivotcheck.output.smb_check import render_smb_check, render_smb_check_json
 from pivotcheck.output.ssh_check import render_ssh_check, render_ssh_check_json
 from pivotcheck.output.terminal import render_detailed, should_use_color
+from pivotcheck.output.whatif import render_what_if, render_what_if_json
 from pivotcheck.output.winrm_check import render_winrm_check, render_winrm_check_json
 from pivotcheck.output.writer import text_stream
 from pivotcheck.storage.baseline_store import (
@@ -129,6 +144,7 @@ from pivotcheck.storage.baseline_store import (
     BaselineNotFoundError,
     BaselineSchemaError,
     BaselineStore,
+    StoredBaseline,
 )
 
 EXIT_OK = 0
@@ -179,7 +195,17 @@ def build_parser() -> argparse.ArgumentParser:
         description="Enumerate interfaces, routes, neighbors, DNS, and sockets,"
         " then classify reachable networks and potential pivot paths.",
     )
-    _add_output_args(discover)
+    _add_output_args(discover, allow_html=True)
+    discover.add_argument(
+        "--output",
+        metavar="PATH",
+        help="write the HTML report artifact to PATH (requires --format html)",
+    )
+    discover.add_argument(
+        "--force",
+        action="store_true",
+        help="allow --output to replace an existing file",
+    )
     _add_filter_args(discover)
     discover.add_argument(
         "--summary",
@@ -202,6 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="saved baseline to show as comparison-aware map context",
     )
     _add_ssh_args(mp)
+    _add_password_args(mp)
 
     # Next-step decision support: select the highest-priority investigation candidate.
     next_cmd = sub.add_parser(
@@ -219,6 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
         "how the candidate's network relates to the saved perspective)",
     )
     _add_output_args(next_cmd)
+    _add_password_args(next_cmd)
 
     # Evidence gap analysis: identify what evidence is missing for a network.
     gaps_cmd = sub.add_parser(
@@ -256,6 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
         "how the network relates to the saved perspective)",
     )
     _add_output_args(explain_cmd)
+    _add_password_args(explain_cmd)
     _add_ssh_args(explain_cmd)
 
     # Active reachability validation: one explicit target, explicit ports.
@@ -288,21 +317,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     check.add_argument(
         "--protocol",
-        choices=["tcp", "ssh", "smb", "winrm"],
+        choices=["tcp", "ssh", "smb", "winrm", "http", "rdp"],
         default="tcp",
         help="validation protocol: tcp (default) performs one explicit "
         "TCP connection per listed port; ssh performs one public-key "
         "authentication attempt against one target:port using a "
         "credential supplied via --ssh-key-env; smb performs one NTLM "
         "session-setup attempt against one target:port using a "
-        "credential supplied via --credential-env; winrm performs one "
-        "WS-Man authentication attempt against one target:port using a "
-        "credential supplied via --credential-env",
+        "credential supplied via --credential-env (add --smb-hash for "
+        "pass-the-hash); winrm performs one WS-Man authentication "
+        "attempt against one target:port using a credential supplied "
+        "via --credential-env (add --winrm-hash for pass-the-hash); "
+        "http performs one HEAD request to one "
+        "target:port (no crawling, no redirects followed; TLS verified "
+        "for https, never bypassed); rdp performs one pre-authentication "
+        "X.224 observation against one target:port (default 3389, no "
+        "credentials, no session, observation only)",
+    )
+    check.add_argument(
+        "--http-tls",
+        action="store_true",
+        help="HTTP protocol only: perform the request over TLS (https). "
+        "Certificates are verified against the system trust store; "
+        "verification failures are reported and never bypassed.",
     )
     check.add_argument(
         "--winrm-user",
         help="WinRM username (winrm protocol only; defaults to the "
-        "current OS user)",
+        "current OS user). Required for --winrm-hash pass-the-hash "
+        "validation.",
+    )
+    check.add_argument(
+        "--winrm-hash",
+        action="store_true",
+        help="WinRM protocol only: --credential-env holds an NTLM hash "
+        "(32 hex chars, or LM:NT) instead of a password; the check "
+        "performs one pass-the-hash WS-Man validation via the backend's "
+        "typed hash credential. The hash is never converted to a "
+        "password and never masquerades as one.",
+    )
+    check.add_argument(
+        "--winrm-ticket-env",
+        metavar="VARIABLE",
+        help="WinRM protocol only: environment variable holding a Kerberos "
+        "ccache reference (e.g., 'FILE:/path/to/cache') for pass-the-ticket "
+        "validation. Requires the optional 'kerberos' extra "
+        "(pip install 'pivotcheck[kerberos]'). The value is never printed, "
+        "logged, or persisted. Mutually exclusive with --credential-env.",
     )
     check.add_argument(
         "--winrm-transport",
@@ -326,14 +387,26 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--credential-env",
         metavar="VARIABLE",
-        help="environment variable holding SMB password material "
-        "(SMB protocol only; required for --protocol smb). The value is "
-        "never printed, logged, or persisted.",
+        help="environment variable holding authentication material "
+        "(SMB/WinRM protocols; required for --protocol smb and "
+        "--protocol winrm): the account password, or — with --smb-hash "
+        "or --winrm-hash — an NTLM hash (32 hex chars, or LM:NT) for "
+        "pass-the-hash validation. The value is never printed, logged, "
+        "or persisted.",
+    )
+    check.add_argument(
+        "--smb-hash",
+        action="store_true",
+        help="SMB protocol only: --credential-env holds an NTLM hash "
+        "(32 hex chars, or LM:NT) instead of a password; the check "
+        "performs one pass-the-hash session setup via the backend's "
+        "typed hash credential. The hash is never converted to a "
+        "password and never masquerades as one.",
     )
     check.add_argument(
         "--smb-user",
         help="SMB username (SMB protocol only; defaults to the current "
-        "OS user)",
+        "OS user). Required for --smb-hash pass-the-hash validation.",
     )
     check.add_argument(
         "--ssh-accept-new-hostkeys",
@@ -343,6 +416,7 @@ def build_parser() -> argparse.ArgumentParser:
         "Default: strict known_hosts verification.",
     )
     _add_output_args(check)
+    _add_password_args(check)
 
     # SOCKS5 proxy-path validation: one explicit proxy, one explicit
     # destination, single port (MVP contract — lists/ranges out of scope).
@@ -396,12 +470,29 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--force", action="store_true", help="atomically replace an existing baseline"
     )
+    create.add_argument(
+        "--encrypt",
+        action="store_true",
+        help="encrypt the baseline at rest (stored as NAME.enc.json). "
+        "The password is read from the environment variable named by "
+        "--password-env; it is never logged, stored, or serialized. "
+        "A lost password means the baseline cannot be recovered.",
+    )
+    create.add_argument(
+        "--password-env",
+        metavar="VARIABLE",
+        help="environment variable holding the baseline-encryption "
+        "password (required with --encrypt). The variable NAME is never "
+        "a secret; the variable VALUE is never printed or persisted.",
+    )
     _add_ssh_args(create)
     listing = baseline_sub.add_parser("list", help="list saved baselines")
     _add_output_args(listing)
+    _add_password_args(listing)
     show = baseline_sub.add_parser("show", help="show one saved baseline")
     show.add_argument("name")
     _add_output_args(show)
+    _add_password_args(show)
     delete = baseline_sub.add_parser("delete", help="delete one saved baseline")
     delete.add_argument("name")
     delete.add_argument("--yes", action="store_true", help="confirm deletion")
@@ -410,7 +501,15 @@ def build_parser() -> argparse.ArgumentParser:
         "compare", help="compare current discovery with a saved baseline"
     )
     comparison.add_argument("baseline", help="saved baseline identifier")
+    comparison.add_argument(
+        "against",
+        nargs="?",
+        default=None,
+        help="second saved baseline to compare against offline "
+        "(no discovery is performed; omit to compare against live discovery)",
+    )
     _add_output_args(comparison)
+    _add_password_args(comparison)
     _add_filter_args(comparison, changes_only=True, minimum_confidence=True)
 
     opsec_cmd = sub.add_parser(
@@ -427,7 +526,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--action",
         required=True,
         help="the action to analyze: ssh-auth, smb-auth, winrm-auth, "
-        "tcp-connect, socks5-connect",
+        "tcp-connect, socks5-connect, http-request",
     )
     opsec_cmd.add_argument(
         "--platform",
@@ -435,6 +534,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="platform where telemetry is expected: windows, linux, macos",
     )
     _add_output_args(opsec_cmd)
+
+    # What-If analysis (G-04): explicitly HYPOTHETICAL. Repeated
+    # --network/--gateway/--interface triplets compose the scenario.
+    what_if = sub.add_parser(
+        "what-if",
+        help="analyze hypothetical routing changes against observed evidence",
+        description=(
+            "HYPOTHETICAL analysis: evaluate assumed routing changes "
+            "against the currently observed state and report what the "
+            "analysis WOULD conclude if the assumptions held. Every "
+            "result is explicitly hypothetical \u2014 nothing is observed, "
+            "validated, or proven reachable. Passive local discovery "
+            "only; no active validation of any kind."
+        ),
+    )
+    what_if.add_argument(
+        "--network",
+        action="append",
+        required=True,
+        metavar="CIDR",
+        help="hypothetical destination network (repeat per hypothesis)",
+    )
+    what_if.add_argument(
+        "--gateway",
+        action="append",
+        required=True,
+        metavar="IP",
+        help="hypothetical gateway for the network (repeat per "
+        "hypothesis, same order as --network)",
+    )
+    what_if.add_argument(
+        "--interface",
+        action="append",
+        required=True,
+        metavar="NAME",
+        help="hypothetical egress interface (repeat per hypothesis, "
+        "same order as --network)",
+    )
+    _add_output_args(what_if)
 
     # Comparison views are deliberately mutually exclusive: each answers a
     # different operator question. Filters (--interface/--family/etc.)
@@ -625,23 +763,51 @@ def _has_filters(options: QueryOptions) -> bool:
     )
 
 
-def _add_output_args(sub_parser: argparse.ArgumentParser) -> None:
+def _add_output_args(
+    sub_parser: argparse.ArgumentParser, *, allow_html: bool = False
+) -> None:
+    """Output-format selection. ``allow_html`` opts a command into the
+    self-contained HTML report (--format html); only snapshot-bearing
+    commands support it, so invalid combinations cannot arise on
+    commands that never render a report."""
+    choices = ["text", "json"] + (["html"] if allow_html else [])
     group = sub_parser.add_mutually_exclusive_group()
     group.add_argument(
         "--format",
-        choices=["text", "json"],
+        choices=choices,
         # None (not "text") so that an explicit --format is always
         # distinguishable from the default: argparse's mutual-exclusion
         # check compares by identity against the default, and a shared
         # interned "text" string would make conflict detection depend on
         # the CPython version. main() normalizes None back to "text".
         default=None,
-        help="output format (default: text)",
+        help="output format (default: text"
+        + ("; 'html' renders a self-contained report" if allow_html else "")
+        + ")",
     )
     group.add_argument(
         "--json",
         action="store_true",
         help="shorthand for --format json",
+    )
+
+
+def _add_password_args(sub_parser: argparse.ArgumentParser) -> None:
+    """Add the baseline-encryption password flag.
+
+    The flag names an environment VARIABLE; the password value is read
+    from that variable at execution time. Command-line password material
+    is deliberately not accepted (command lines are observable to other
+    users and to shell history).
+    """
+    sub_parser.add_argument(
+        "--password-env",
+        metavar="VARIABLE",
+        help="environment variable holding the baseline-encryption "
+        "password, for reading or creating ENCRYPTED baselines "
+        "(NAME.enc.json). Plaintext baselines are unaffected. The "
+        "variable name is never a secret; the value is never printed, "
+        "logged, or persisted.",
     )
 
 
@@ -662,22 +828,54 @@ def _parse_ports(port_arg: str) -> list[int] | None:
 
 
 def _load_baseline_for_check(args: argparse.Namespace):
-    """Load the requested baseline for contextual check.
+    """Load the requested baseline for any baseline-consuming command.
 
     Returns ``(stored, error_code)``; exactly one element is None.
     The baseline is loaded BEFORE any discovery or socket activity so a
     missing/invalid baseline fails explicitly rather than silently
-    performing an uncontextualized check.
+    performing an uncontextualized check. Encrypted baselines fail
+    closed with an explicit operator message when no password is
+    supplied.
     """
+    password, pw_error = _baseline_password(args)
+    if pw_error is not None:
+        return None, pw_error
     store = BaselineStore(args.data_dir)
     try:
-        return store.load(args.baseline), None
+        stored = store.load(args.baseline, password=password)
     except BaselineNotFoundError as exc:
         print(f"[-] {exc}", file=sys.stderr)
         return None, EXIT_BASELINE_NOT_FOUND
     except BaselineSchemaError as exc:
         print(f"[-] Unsupported or invalid baseline: {exc}", file=sys.stderr)
         return None, EXIT_BASELINE_SCHEMA
+    return stored, None
+
+
+def _baseline_password(args: argparse.Namespace):
+    """Resolve the optional baseline-encryption password.
+
+    The password never comes from the command line (shell history is
+    observable): the flag names an environment VARIABLE, and the value
+    is read verbatim from that variable — the same explicit env-var
+    contract as every other PivotCheck secret. Never logged, never
+    serialized, never persisted. Returns ``(password, error_code)``.
+    """
+    env_name = getattr(args, "password_env", None)
+    if not env_name:
+        return None, None
+    from pivotcheck.models.credentials import CredentialType
+    from pivotcheck.utils.credential_loader import (
+        CredentialLoadError,
+        load_credential,
+    )
+
+    try:
+        credential = load_credential(CredentialType.PASSWORD, env_name)
+    except CredentialLoadError as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return None, EXIT_USAGE
+    return credential.secret, None
 
 
 def _run_check(args: argparse.Namespace) -> int:
@@ -688,6 +886,10 @@ def _run_check(args: argparse.Namespace) -> int:
         return _run_check_smb(args)
     if getattr(args, "protocol", "tcp") == "winrm":
         return _run_check_winrm(args)
+    if getattr(args, "protocol", "tcp") == "http":
+        return _run_check_http(args)
+    if getattr(args, "protocol", "tcp") == "rdp":
+        return _run_check_rdp(args)
     ports = _parse_ports(args.port)
     if ports is None:
         print("[-] Invalid --port value.", file=sys.stderr)
@@ -951,6 +1153,142 @@ def _run_check_ssh(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _run_check_http(args: argparse.Namespace) -> int:
+    """Execute ONE explicit HTTP HEAD validation.
+
+    Exit codes mirror the documented check contract:
+        0 — validation executed; HTTP_RESPONSE / CONNECTION_FAILED /
+            TIMEOUT / TLS_FAILED / PROTOCOL_ERROR are data, not CLI failures
+        1 — fatal internal/local execution failure
+        2 — invalid CLI usage (port, timeout, invalid host)
+        3 — target could not be resolved
+    """
+    if getattr(args, "baseline", None):
+        print(
+            "[-] --baseline is not supported for --protocol http: baseline "
+            "comparison is passive-topology context and does not apply to "
+            "an application-layer request.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    port = _parse_single_port(args.port)
+    if port is None:
+        print("[-] Invalid --port value for HTTP validation.", file=sys.stderr)
+        print(
+            "    HTTP validation is one target, one port, one request: "
+            "--port 80 (or one explicit port). Lists and ranges are "
+            "deliberately not supported.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        timeout_s = validate_timeout(args.timeout)
+        scheme = "https" if args.http_tls else "http"
+        result = check_http(
+            args.target,
+            port,
+            timeout_s,
+            scheme=scheme,
+        )
+    except ValueError as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    import socket as _socket
+    import uuid
+    from datetime import datetime, timezone
+
+    report = HTTPCheckReport(
+        target=result.target,
+        port=port,
+        timeout_s=timeout_s,
+        results=(result,),
+        command="check",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        perspective_hostname=_socket.gethostname(),
+        perspective_session_id=uuid.uuid4().hex[:16],
+    )
+    stream = sys.stdout
+    if args.format == "json" or args.json:
+        render_http_check_json(report, stream)
+    else:
+        color = should_use_color(sys.stdout, args.no_color)
+        render_http_check(report, stream, color=color)
+
+    if result.status is HTTPCheckStatus.DNS_ERROR:
+        return EXIT_RESOLVE
+    if result.status is HTTPCheckStatus.LOCAL_ERROR:
+        return EXIT_FATAL
+    return EXIT_OK
+
+
+def _run_check_rdp(args: argparse.Namespace) -> int:
+    """Execute ONE bounded RDP pre-authentication observation.
+
+    Exit codes mirror the documented check contract:
+        0 — observation executed; every classified status is data
+        1 — fatal internal/local execution failure
+        2 — invalid CLI usage (port, timeout, invalid target)
+        3 — target could not be resolved
+    """
+    if getattr(args, "baseline", None):
+        print(
+            "[-] --baseline is not supported for --protocol rdp: baseline "
+            "comparison is passive-topology context and does not apply to "
+            "a pre-authentication observation.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    port = _parse_single_port(args.port)
+    if port is None:
+        print("[-] Invalid --port value for RDP observation.", file=sys.stderr)
+        print(
+            "    RDP observation is one target, one port: --port 3389 "
+            "(or one explicit port). Lists and ranges are deliberately "
+            "not supported.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        timeout_s = validate_timeout(args.timeout)
+    except ValueError as exc:
+        print(f"[-] Invalid --timeout: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        result = validate_rdp_observation(args.target, port, timeout_s)
+    except ValueError as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    import socket as _socket
+    import uuid
+    from datetime import datetime, timezone
+
+    report = RDPCheckReport(
+        target=result.target,
+        port=port,
+        timeout_s=timeout_s,
+        results=(result,),
+        command="check",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        perspective_hostname=_socket.gethostname(),
+        perspective_session_id=uuid.uuid4().hex[:16],
+    )
+    stream = sys.stdout
+    if args.format == "json" or args.json:
+        render_rdp_check_json(report, stream)
+    else:
+        color = should_use_color(sys.stdout, args.no_color)
+        render_rdp_check(report, stream, color=color)
+
+    if result.status is RDPCheckStatus.DNS_ERROR:
+        return EXIT_RESOLVE
+    if result.status is RDPCheckStatus.LOCAL_ERROR:
+        return EXIT_FATAL
+    return EXIT_OK
+
+
 def _redact_credentials(text: str) -> str:
     """Redact URL userinfo passwords from error text (defense in depth).
 
@@ -1025,8 +1363,18 @@ def _run_check_smb(args: argparse.Namespace) -> int:
         return EXIT_USAGE
 
     username = args.smb_user or getpass.getuser()
+    credential_type = (
+        CredentialType.NTLM_HASH if getattr(args, "smb_hash", False) else CredentialType.PASSWORD
+    )
+    if credential_type is CredentialType.NTLM_HASH and not args.smb_user:
+        print(
+            "[-] --smb-hash requires --smb-user: an NTLM hash authenticates "
+            "an account, it does not identify one.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
     try:
-        credential = load_credential(CredentialType.PASSWORD, env_name, username=username)
+        credential = load_credential(credential_type, env_name, username=username)
     except CredentialLoadError as exc:
         print(f"[-] {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -1107,23 +1455,64 @@ def _run_check_winrm(args: argparse.Namespace) -> int:
         print(f"[-] Invalid --timeout: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
-    env_name = getattr(args, "credential_env", None)
-    if not env_name:
+    # Determine credential source: --credential-env (password/hash) OR --winrm-ticket-env (Kerberos)
+    # These are mutually exclusive.
+    has_credential_env = getattr(args, "credential_env", None) is not None
+    has_ticket_env = getattr(args, "winrm_ticket_env", None) is not None
+    has_hash = getattr(args, "winrm_hash", False)
+
+    if has_ticket_env and (has_credential_env or has_hash):
         print(
-            "[-] --protocol winrm requires --credential-env VARIABLE holding "
-            "the password material (command-line credential material is "
-            "deliberately not accepted; command lines are observable to "
-            "other users).",
+            "[-] --winrm-ticket-env is mutually exclusive with --credential-env and --winrm-hash.",
             file=sys.stderr,
         )
         return EXIT_USAGE
-    if not _validate_env_var_name(env_name):
-        print(f"[-] Invalid environment variable name: {env_name!r}", file=sys.stderr)
-        return EXIT_USAGE
+
+    if has_ticket_env:
+        # Kerberos ticket path
+        env_name = args.winrm_ticket_env
+        if not _validate_env_var_name(env_name):
+            print(f"[-] Invalid environment variable name: {env_name!r}", file=sys.stderr)
+            return EXIT_USAGE
+        credential_type = CredentialType.KERBEROS_TICKET
+        if not args.winrm_user:
+            print(
+                "[-] --winrm-ticket-env requires --winrm-user: a Kerberos ticket "
+                "authenticates an account, it does not identify one.",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+    else:
+        # Password or NTLM hash path
+        env_name = getattr(args, "credential_env", None)
+        if not env_name:
+            print(
+                "[-] --protocol winrm requires --credential-env VARIABLE holding "
+                "the password material (or, with --winrm-hash, the NTLM hash; "
+                "or, with --winrm-ticket-env, the Kerberos ccache reference; "
+                "command-line credential material is deliberately not accepted; "
+                "command lines are observable to other users).",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        if not _validate_env_var_name(env_name):
+            print(f"[-] Invalid environment variable name: {env_name!r}", file=sys.stderr)
+            return EXIT_USAGE
+
+        credential_type = (
+            CredentialType.NTLM_HASH if has_hash else CredentialType.PASSWORD
+        )
+        if credential_type is CredentialType.NTLM_HASH and not args.winrm_user:
+            print(
+                "[-] --winrm-hash requires --winrm-user: an NTLM hash authenticates "
+                "an account, it does not identify one.",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
 
     username = args.winrm_user or getpass.getuser()
     try:
-        credential = load_credential(CredentialType.PASSWORD, env_name, username=username)
+        credential = load_credential(credential_type, env_name, username=username)
     except CredentialLoadError as exc:
         print(f"[-] {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -1381,18 +1770,43 @@ def _run_baseline(args: argparse.Namespace) -> int:
     if command is None:
         print("[-] Choose baseline create, list, show, or delete.", file=sys.stderr)
         return EXIT_USAGE
+    password, pw_error = _baseline_password(args)
+    if pw_error is not None:
+        return pw_error
     try:
         if command == "create":
             snapshot, discovery_error = _run_discovery_for(args)
             if discovery_error is not None:
                 return discovery_error
             assert snapshot is not None  # contract: exactly one element set
+            encrypt = getattr(args, "encrypt", False)
+            if encrypt and password is None:
+                print(
+                    "[-] --encrypt requires --password-env VARIABLE holding the "
+                    "encryption password (command-line password material is "
+                    "deliberately not accepted; command lines are observable "
+                    "to other users).",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
+            if not encrypt and password is not None:
+                print(
+                    "[-] --password-env is only meaningful with --encrypt: "
+                    "plaintext baselines never read a password. This "
+                    "combination is rejected rather than silently ignored.",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
             stored = store.create(
-                args.name, baseline_from_snapshot(snapshot), force=args.force
+                args.name,
+                baseline_from_snapshot(snapshot),
+                force=args.force,
+                password=password if encrypt else None,
             )
-            print(f"[+] Saved baseline: {stored.name}")
+            suffix = " (encrypted at rest)" if encrypt else ""
+            print(f"[+] Saved baseline: {stored.name}{suffix}")
         elif command == "list":
-            entries = store.list()
+            entries = store.list(password=password)
             if _use_json(args):
                 import json
 
@@ -1422,7 +1836,9 @@ def _run_baseline(args: argparse.Namespace) -> int:
                     )
                     print(f"{item.name}\t{label}\t{item.baseline.created_at}")
         elif command == "show":
-            _render_baseline(store.load(args.name), sys.stdout, _use_json(args))
+            _render_baseline(
+                store.load(args.name, password=password), sys.stdout, _use_json(args)
+            )
         else:
             if not args.yes:
                 print("[-] Refusing deletion without --yes.", file=sys.stderr)
@@ -1444,16 +1860,102 @@ def _run_baseline(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _run_compare(args: argparse.Namespace) -> int:
-    store = BaselineStore(args.data_dir)
+def _run_compare_against(
+    args: argparse.Namespace,
+    store: BaselineStore,
+    stored: StoredBaseline,
+    against: str,
+    password: str | None,
+) -> int:
+    """Compare two saved baselines offline (no discovery is performed).
+
+    Diff semantics are byte-identical to snapshot comparison: the same
+    pure compare() runs over the two saved Baseline objects. Options that
+    require a current discovery snapshot (evidence explanations,
+    recommendations, explain, snapshot filters) are rejected in
+    _run_compare before any data access, not silently ignored.
+    """
     try:
-        stored = store.load(args.baseline)
+        other = store.load(against, password=password)
     except BaselineNotFoundError as exc:
         print(f"[-] {exc}", file=sys.stderr)
         return EXIT_BASELINE_NOT_FOUND
     except BaselineSchemaError as exc:
         print(f"[-] Unsupported or invalid baseline: {exc}", file=sys.stderr)
         return EXIT_BASELINE_SCHEMA
+
+    report = compare(stored.baseline, other.baseline)
+
+    if _use_json(args):
+        document = comparison_to_dict(stored, other.baseline, report)
+        document["comparison_mode"] = "baseline_to_baseline"
+        document["baseline"] = {
+            "name": stored.name,
+            "created_at": stored.baseline.created_at,
+            "vantage_point": _session_dict(stored.baseline),
+        }
+        document["current"] = {
+            "name": other.name,
+            "created_at": other.baseline.created_at,
+            "vantage_point": _session_dict(other.baseline),
+        }
+        if getattr(args, "summary", False):
+            document["summary"] = summarize_comparison(report).to_dict()
+        payload = _json_text(document)
+        if args.output:
+            return _write_output(args, payload)
+        sys.stdout.write(payload)
+        return EXIT_OK
+
+    stream: TextIO = sys.stdout
+    print("PIVOTCHECK - BASELINE-TO-BASELINE COMPARISON (offline)", file=stream)
+    print(f"Baseline: {stored.name} ({stored.baseline.created_at})", file=stream)
+    print(f"Against:  {other.name} ({other.baseline.created_at})", file=stream)
+    if args.summary:
+        render_summary(summarize_comparison(report), stream)
+    else:
+        render_comparison(stored, other.baseline, report, stream, verbose=args.verbose)
+    return EXIT_OK
+
+
+def _session_dict(baseline) -> dict[str, str] | None:
+    return baseline.vantage_point.to_dict() if baseline.vantage_point else None
+
+
+def _run_compare(args: argparse.Namespace) -> int:
+    if getattr(args, "against", None):
+        # Reject discovery-dependent options BEFORE any data access: an
+        # invalid combination must fail as usage regardless of store state.
+        options = _query_options(args)
+        if (
+            getattr(args, "evidence", False)
+            or getattr(args, "recommend", False)
+            or getattr(args, "explain", None)
+            or _has_filters(options)
+        ):
+            print(
+                "[-] Options that require current discovery (--evidence, "
+                "--recommend, --explain, family/confidence/focus filters) are "
+                "not supported when comparing two saved baselines.",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+
+    store = BaselineStore(args.data_dir)
+    password, pw_error = _baseline_password(args)
+    if pw_error is not None:
+        return pw_error
+    try:
+        stored = store.load(args.baseline, password=password)
+    except BaselineNotFoundError as exc:
+        print(f"[-] {exc}", file=sys.stderr)
+        return EXIT_BASELINE_NOT_FOUND
+    except BaselineSchemaError as exc:
+        print(f"[-] Unsupported or invalid baseline: {exc}", file=sys.stderr)
+        return EXIT_BASELINE_SCHEMA
+
+    if getattr(args, "against", None):
+        return _run_compare_against(args, store, stored, args.against, password)
 
     options = _query_options(args)  # validates family/confidence/focus values
     try:
@@ -1592,8 +2094,11 @@ def _write_output(args: argparse.Namespace, payload: str) -> int:
 def _run_map_with_baseline(args: argparse.Namespace) -> int:
     """Load comparison context, collect once, then render a map view."""
     store = BaselineStore(args.data_dir)
+    password, pw_error = _baseline_password(args)
+    if pw_error is not None:
+        return pw_error
     try:
-        stored = store.load(args.baseline)
+        stored = store.load(args.baseline, password=password)
     except BaselineNotFoundError as exc:
         print(f"[-] {exc}", file=sys.stderr)
         return EXIT_BASELINE_NOT_FOUND
@@ -1724,6 +2229,74 @@ def _run_gaps(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _parse_hypotheses(args: argparse.Namespace) -> tuple[list, int | None]:
+    """Parse the repeated --network/--gateway/--interface hypothesis
+    triplets. Returns (hypotheses, error_code); exactly one is set.
+
+    Lengths must match exactly; partial triplets are a usage error
+    rather than silently interpreted defaults. The model constructor
+    enforces CIDR/IP validity and cross-family/self-referential
+    rejection (fail closed before any analysis).
+    """
+    networks = getattr(args, "network", None) or []
+    gateways = getattr(args, "gateway", None) or []
+    interfaces = getattr(args, "interface", None) or []
+    if not (len(networks) == len(gateways) == len(interfaces)):
+        print(
+            "[-] Each hypothesis needs all three values: --network CIDR, "
+            "--gateway IP, --interface NAME (repeated per hypothesis, in "
+            "the same order).",
+            file=sys.stderr,
+        )
+        return [], EXIT_USAGE
+    if not networks:
+        print(
+            "[-] At least one hypothesis is required: --network CIDR, "
+            "--gateway IP, --interface NAME.",
+            file=sys.stderr,
+        )
+        return [], EXIT_USAGE
+    try:
+        hypotheses = [
+            HypotheticalRoute(network=network, gateway=gateway, interface=iface)
+            for network, gateway, iface in zip(networks, gateways, interfaces)
+        ]
+    except ValueError as exc:
+        print(f"[-] Invalid hypothesis: {exc}", file=sys.stderr)
+        return [], EXIT_USAGE
+    return hypotheses, None
+
+
+def _run_what_if(args: argparse.Namespace) -> int:
+    """Execute hypothetical what-if analysis (pure, passive).
+
+    Performs passive local discovery only (identical to `discover`):
+    zero active network I/O. The hypotheses are NEVER treated as
+    observed evidence; every output element is marked HYPOTHETICAL.
+    """
+    hypotheses, error = _parse_hypotheses(args)
+    if error is not None:
+        return error
+
+    # Passive local discovery once (the same passive pipeline as discover).
+    try:
+        snapshot = run_discovery()
+    except Exception as exc:  # noqa: BLE001 - discovery error boundary
+        print("[-] Unable to perform network discovery.", file=sys.stderr)
+        print(f"    Reason: {exc}", file=sys.stderr)
+        return EXIT_FATAL
+
+    report = analyze_what_if(snapshot, hypotheses)
+
+    stream = sys.stdout
+    if args.format == "json" or args.json:
+        render_what_if_json(report, stream)
+    else:
+        color = should_use_color(sys.stdout, args.no_color)
+        render_what_if(report, stream, color=color)
+    return EXIT_OK
+
+
 def _run_explain(args: argparse.Namespace) -> int:
     """Execute standalone network explanation."""
     error = _validate_network_argument(args.network)
@@ -1821,6 +2394,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "gaps":
         return _run_gaps(args)
 
+    if args.command == "what-if":
+        return _run_what_if(args)
+
     if args.command == "explain":
         return _run_explain(args)
 
@@ -1849,6 +2425,32 @@ def main(argv: list[str] | None = None) -> int:
             render_map_view_json(view, stream)
         else:
             render_map_view(view, stream, color=color)
+    elif getattr(args, "format", None) == "html":
+        # G-05: self-contained HTML report. Presentation only — the
+        # renderer consumes the already-analyzed snapshot. Deterministic:
+        # identical snapshots produce identical bytes. Written as an
+        # artifact when --output is given (respecting --force), never
+        # streamed to a terminal (HTML to stdout is not a terminal use
+        # case; --output is the supported delivery).
+        from pivotcheck.output.html import render_html
+
+        if not getattr(args, "output", None):
+            print(
+                "[-] --format html requires --output PATH: the report is a "
+                "file artifact, not terminal output.",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        document = render_html(snapshot)
+        return _write_output(args, document)
+    elif getattr(args, "output", None):
+        # --output on discover is defined only for --format html; other
+        # formats must not silently ignore it.
+        print(
+            "[-] --output on discover requires --format html.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
     elif getattr(args, "summary", False):
         render_summary(summarize_snapshot(snapshot), stream)
     elif use_json:

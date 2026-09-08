@@ -29,7 +29,8 @@ from enum import Enum
 from pivotcheck.utils.redaction import REDACTED as REDACTED_LABEL
 
 _PEM_KEY_RE = re.compile(r"^-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
-_NTLM_RE = re.compile(r"^([0-9a-fA-F]{32}:)?[0-9a-fA-F]{32}$")
+_NTLM_RE = re.compile(r"([0-9a-fA-F]{32}:)?[0-9a-fA-F]{32}\Z")
+_CCACHE_RE = re.compile(r"^(FILE|DIR|MEMORY|KEYRING):\S+$")
 
 
 class CredentialType(str, Enum):
@@ -105,6 +106,14 @@ class Credential:
             raise ValueError(
                 "SSH private key credential must begin with a PEM private key "
                 "header (no leading whitespace; strip before storing)"
+            )
+        if self.credential_type is CredentialType.KERBEROS_TICKET and not _CCACHE_RE.match(
+            self.secret
+        ):
+            raise ValueError(
+                "Kerberos ticket credential secret must be a ccache reference "
+                "(e.g., 'FILE:/path/to/cache' or 'DIR:/path/to/cache'); "
+                "surrounding whitespace is not permitted (strip before storing)"
             )
         domain_types = (CredentialType.NTLM_HASH, CredentialType.KERBEROS_TICKET)
         if self.credential_type not in domain_types and self.domain is not None:

@@ -4,8 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 2.0.x   | ✅ Stable release  |
-| 1.0.x   | ❌ Legacy, unsupported |
+| 1.0.x   | ✅ Stable release  |
+| 2.0.x   | ❌ Legacy, unsupported |
 
 ## Reporting a Vulnerability
 
@@ -82,4 +82,4 @@ For security reports, use the GitHub security advisory feature at
 
 ---
 
-*This policy applies to PivotCheck v2.0.0 and subsequent versions unless superseded.*
+*This policy applies to PivotCheck v1.0.0 and subsequent versions unless superseded.*

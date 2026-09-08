@@ -26,7 +26,7 @@ not scan, spray, exploit, tunnel, or execute commands remotely.
 | Field | Value |
 |---|---|
 | Name | `pivotcheck` |
-| Version | 2.0.0 |
+| Version | 1.0.0 |
 | License | GPL-3.0-only |
 | Language | Python >= 3.10 |
 | Entry point | `pivotcheck` (console script); `python -m pivotcheck` equivalent |

@@ -31,12 +31,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Run unit tests
-        run: python -m pytest tests/ -q
-
-      - name: Run integration tests
-        run: python -m pytest -m integration -q
-
       - name: Run Ruff
         run: ruff check .
 

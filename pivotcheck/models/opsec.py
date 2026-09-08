@@ -29,6 +29,7 @@ class OpsecAction(str, Enum):
     WINRM_AUTH = "winrm-auth"
     TCP_CONNECT = "tcp-connect"
     SOCKS5_CONNECT = "socks5-connect"
+    HTTP_REQUEST = "http-request"
 
 
 class OpsecPlatform(str, Enum):

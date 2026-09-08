@@ -2,6 +2,89 @@
 
 All notable changes to PivotCheck are documented in this file.
 
+## [1.0.0] — unreleased
+
+### Added
+
+- NTLM pass-the-hash SMB validation (G-01): `check --protocol smb
+  --smb-hash` treats `--credential-env` as an NTLM hash (32 hex chars, or
+  LM:NT) and performs ONE session-setup authentication attempt against
+  one target:port using the backend's documented typed hash credential
+  (`spnego.NTLMHash`). Requires `--smb-user` (a hash authenticates an
+  account, it does not identify one). The hash is never converted to a
+  password, never serialized, and never surfaced in diagnostics; failed
+  hash attempts never trigger fallback credentials, guest access, or
+  retries. `AUTH_FAILED` remains `AUTH_FAILED` (the backend does not
+  distinguish hash-invalid from account-locked). A successful SMB
+  session setup does NOT imply authorization, share access, command
+  execution, or lateral-movement capability. Requires the optional
+  `smb` extra.
+- RDP pre-authentication observation (G-08): `check --protocol rdp`
+  performs one bounded TPKT/X.224 exchange against one target:port
+  (default 3389) and classifies the response. Observation only: zero
+  credentials, zero authentication, zero session establishment, zero
+  enumeration. The strongest claim is `RDP_RESPONSE_OBSERVED` plus the
+  security protocol the server explicitly selected (PROTOCOL_RDP / SSL /
+  HYBRID / HYBRID_EX); malformed, truncated, and non-RDP responses fail
+  closed; `TIMEOUT` remains ambiguous. RDP response observation is not
+  authentication, authorization, desktop access, command execution, or
+  proof of compromise.
+- HTTP service validation: `check --protocol http` performs one explicit
+  HTTP HEAD request against one target:port (optional `--http-tls` for
+  https with certificate verification). No crawling, no enumeration, no
+  retries, no redirects followed; an HTTP response is an observation, never
+  proof of authorization or application health. TLS failures are reported
+  and never bypassed.
+- Baseline-to-baseline offline comparison: `pivotcheck compare A B` diffs
+  two saved baselines without performing discovery, using the same
+  deterministic comparison semantics as live comparison.
+- Encrypted baseline storage (optional `encrypt` extra): `baseline create
+  --encrypt --password-env VAR` stores the baseline as `NAME.enc.json`
+  using the audited Fernet primitive (AES-128-CBC + HMAC-SHA256) with a
+  stdlib scrypt-derived key (n=16384, r=8, p=1; centrally defined and
+  bounded). The password is read from a named environment variable —
+  never the command line — and is never logged, stored, or serialized.
+  Wrong passwords, tampered ciphertext, and corrupted containers fail
+  closed; decryption success never implies schema validity; a missing
+  password never masks the baseline as "not found". Plaintext baselines
+  remain the default and are unaffected.
+- What-If analysis (G-04): `pivotcheck what-if --network CIDR --gateway IP
+  --interface NAME` (triplets repeatable) evaluates hypothetical routing
+  changes against observed state. PURE analysis with explicit
+  HYPOTHETICAL semantics: every finding and JSON element is marked
+  HYPOTHETICal, contradictions with observed evidence are preserved
+  (never overwritten), determinism is permutation-invariant, and the
+  input snapshot is never mutated. No result proves reachability,
+  forwarding, authentication, or execution.
+- HTTP OPSEC action (G-16): `opsec --action http-request` describes the
+  expected telemetry of one credential-less HTTP HEAD request on
+  windows/linux/macos using the existing calibrated vocabulary
+  (DOCUMENTED/LIKELY/POSSIBLE/ENVIRONMENT_DEPENDENT/NOT_EXPECTED).
+  Predictive intelligence only — no evasion, suppression, or bypass
+  guidance; HTTPS is explicitly described as visibility-changing, not
+  stealthy.
+
+### Fixed
+
+- README "Limitations" incorrectly stated that passive discovery requires
+  Linux tooling. Passive discovery has been cross-platform since 2.0.0
+  (Linux, Windows, macOS collectors with runtime dispatch); the README now
+  describes the actual per-platform collectors and their caveats.
+- `KALI_TOOLS_SUBMISSION.md` package facts referenced 2.0.0; updated to
+  the current release facts.
+- `compare A B` rejects discovery-dependent options (--evidence,
+  --recommend, --explain, family/confidence/focus filters) before any
+  data access: an invalid combination is a usage error regardless of
+  store contents, never a misleading not-found.
+
+### Documentation
+
+- Added `docs/confidence-model.md` specifying the exact deterministic
+  confidence rules (HIGH ⇔ connected + interface UP; routing never
+  exceeds MEDIUM; contradictions never promoted) and the distinction
+  between confidence, investigation priority, and prediction.
+- Added `CODE_OF_CONDUCT.md` and `MAINTAINER_GUIDE.md`.
+
 ## [2.0.2] — 2026-08-31
 
 ### Fixed

@@ -1,0 +1,99 @@
+name: Feature Request
+description: Request a new capability or enhancement for PivotCheck
+title: "[FEATURE] "
+labels: ["feature-request", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        PivotCheck follows an evidence-first development process. Feature requests are evaluated against:
+
+        1. **Real operator need** — demonstrated workflow gap, not hypothetical
+        2. **Architectural fit** — preserves layering, evidence semantics, network safety
+        3. **Security compatibility** — no credential persistence, no scanning, no telemetry
+        4. **Scope** — transport-layer validation only (TCP, SSH, SMB, WinRM, SOCKS5)
+
+        The following remain explicitly NON-ADMITTED without operator evidence:
+        - Pass-the-Hash / Pass-the-Ticket
+        - RDP / Telnet / UDP / WMI
+        - What-if analysis / HTML-PDF / TUI
+        - Encrypted baselines / Graph enhancements
+        - Additional protocols / Speculative abstractions
+
+        Please describe the genuine workflow problem you encountered.
+
+  - type: input
+    id: version
+    attributes:
+      label: PivotCheck Version
+      description: Output of `pivotcheck --version`
+      placeholder: "pivotcheck 1.0.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use Case / Workflow Gap
+      description: Describe the real operator workflow problem. What are you trying to achieve that PivotCheck cannot currently do?
+      placeholder: |
+        During an assessment, I needed to validate X but PivotCheck only supports Y.
+        The specific gap is Z.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_workaround
+    attributes:
+      label: Current Workaround
+      description: How do you currently solve this problem? What tools/steps do you use?
+      placeholder: |
+        Currently I manually run [tool] with [args] and parse the output...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_solution
+    attributes:
+      label: Proposed Solution (if any)
+      description: What would the ideal PivotCheck behavior look like?
+      placeholder: |
+        A new protocol `check --protocol X` that validates Y with one explicit target...
+    validations:
+      required: false
+
+  - type: textarea
+    id: architectural_fit
+    attributes:
+      label: Architectural Fit Assessment
+      description: How does this fit PivotCheck's architecture? Consider: layering, evidence semantics, one-target/one-port/one-credential/one-attempt, no scanning, no retries.
+      placeholder: |
+        This would be a new validation protocol under `check`, preserving the existing contract...
+    validations:
+      required: true
+
+  - type: textarea
+    id: security_impact
+    attributes:
+      label: Security Impact
+      description: Does this introduce any credential handling, network behavior, or telemetry changes? How are secrets handled?
+      placeholder: |
+        Credentials would be supplied via --credential-env, redacted in output, no persistence...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints Acknowledged
+      options:
+        - label: "I understand this must preserve one-target/one-port/one-credential/one-attempt"
+          required: true
+        - label: "I understand no CIDR expansion, port ranges, retries, or fallback chains are permitted"
+          required: true
+        - label: "I understand no credential persistence or telemetry is permitted"
+          required: true
+        - label: "I understand this must be transport-layer validation (no application-layer execution)"
+          required: true
+        - label: "I have read the CONTRIBUTING.md architecture invariants"
+          required: true

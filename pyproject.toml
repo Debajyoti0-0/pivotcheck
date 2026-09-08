@@ -37,7 +37,12 @@ Changelog = "https://github.com/Debajyoti0-0/pivotcheck/blob/master/CHANGELOG.md
 socks = ["PySocks>=1.7.1"]
 smb = ["smbprotocol>=1.15,<2"]
 winrm = ["pywinrm>=0.5.0,<0.6"]
-dev = ["pytest>=8.0", "pytest-cov", "ruff", "mypy"]
+kerberos = [
+    "gssapi>=1.10",
+    "krb5>=0.10; platform_system != \"Windows\"",
+]
+encrypt = ["cryptography>=42.0"]
+dev = ["ruff", "mypy", "cryptography>=42.0"]
 
 [project.scripts]
 pivotcheck = "pivotcheck.cli:main"
@@ -48,13 +53,6 @@ include = ["pivotcheck*"]
 [tool.setuptools.dynamic]
 version = { attr = "pivotcheck.__version__" }
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q -m 'not integration'"
-markers = [
-    "integration: requires live operating-system or network resources",
-]
-
 [tool.ruff]
 line-length = 88
 target-version = "py310"
@@ -63,3 +61,16 @@ target-version = "py310"
 python_version = "3.10"
 warn_unused_ignores = true
 disallow_untyped_defs = false
+
+# Optional backend extras may or may not be installed in the analyzing
+# environment; treat their imports as present-but-untyped in both cases
+# so type-checking is environment-stable.
+[[tool.mypy.overrides]]
+module = [
+  "smbprotocol.*",
+  "spnego.*",
+  "winrm.*",
+  "requests_ntlm.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"

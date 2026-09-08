@@ -22,10 +22,18 @@ Backend decision (documented, deliberate):
   certificates (never silently disabled); TLS failures are classified
   TLS_FAILED, distinctly from authentication failure. No HTTP->HTTPS or
   HTTPS->HTTP downgrade ever occurs.
-- NTLM hash support: requests-ntlm (the underlying auth handler) accepts
-  password material only through pywinrm's public surface. Hash
-  pass-the-hash is therefore NOT supported and an NTLM_HASH credential
-  is classified UNSUPPORTED_CREDENTIAL rather than faked.
+- NTLM hash support (G-01B, Stage 43): an NTLM_HASH credential is
+  translated into the backend's typed hash primitive
+  (``spnego.NTLMHash``) and supplied to ``requests_ntlm.HttpNtlmAuth``
+  as the username credential with ``password=None``. requests-ntlm 1.3.0
+  forwards the credential object to ``spnego.client`` (documented to
+  accept spnego ``Credential`` objects), and spnego's dispatcher
+  structurally excludes SSPI when an ``NTLMHash`` credential is present,
+  so the hash participates ONLY as NTLM keying material — it is never
+  placed into a password field and never masquerades as a password.
+  The hash path mirrors the password transport: one WS-Man Get, TLS
+  verification always on for HTTPS, message encryption for HTTP
+  (reusing ``winrm.encryption.Encryption``), no downgrade, no fallback.
 
 Hard boundary (structural):
 
@@ -39,9 +47,11 @@ Hard boundary (structural):
 
 from __future__ import annotations
 
+import base64
 import logging
 import time
 from collections.abc import Callable
+from typing import Any
 
 from pivotcheck.models.credentials import Credential, CredentialType
 from pivotcheck.models.winrm_check import (
@@ -190,13 +200,13 @@ def _default_backend(
     extra is missing.
     """
     try:
-        from winrm.exceptions import (  # type: ignore[import-not-found]
+        from winrm.exceptions import (
             AuthenticationError,
             InvalidCredentialsError,
             WinRMError,
             WinRMTransportError,
         )
-        from winrm.transport import Transport  # type: ignore[import-not-found]
+        from winrm.transport import Transport
     except ImportError as exc:
         raise WinRMBackendUnavailable(
             "the WinRM backend is unavailable: install the optional 'winrm' "
@@ -257,6 +267,346 @@ def _default_backend(
 
 
 # ---------------------------------------------------------------------------
+# NTLM hash backend (G-01B, Stage 43; imported lazily)
+# ---------------------------------------------------------------------------
+
+
+def _winrm_hash_credential(credential: Credential) -> Any:
+    """Translate the NTLM_HASH credential into the backend's typed hash
+    primitive (G-01B).
+
+    Explicit typed boundary: NTLM_HASH -> spnego.NTLMHash (the documented
+    public credential class accepted by ``spnego.client``, which
+    requests_ntlm 1.3.0 forwards its auth credentials to). The hash is
+    NEVER converted into a password, never stored, never serialized.
+
+    - 32-hex secret  -> nt_hash (LM omitted; modern NTLM ignores it)
+    - LM:NT secret   -> lm_hash + nt_hash
+    - Hex is normalized to uppercase (case-agnostic material).
+    - Username carries the optional domain in NTLM 'DOMAIN\\user' form.
+    """
+    try:
+        from spnego import NTLMHash
+    except ImportError as exc:
+        raise WinRMBackendUnavailable(
+            "the WinRM NTLM hash backend is unavailable: install the optional "
+            "'winrm' extra (pip install 'pivotcheck[winrm]')"
+        ) from exc
+    secret = credential.secret
+    if ":" in secret:
+        lm_raw, _, nt_raw = secret.partition(":")
+        lm_hash: str | None = lm_raw.upper()
+        nt_hash: str = nt_raw.upper()
+    else:
+        lm_hash = None
+        nt_hash = secret.upper()
+    username = credential.username or ""
+    if credential.domain:
+        username = f"{credential.domain}\\{username}"
+    return NTLMHash(username=username, lm_hash=lm_hash, nt_hash=nt_hash)
+
+
+def _hash_default_backend(
+    target: str,
+    port: int,
+    credential: Credential,
+    timeout: float,
+    scheme: str,
+) -> tuple[str, str]:
+    """Run the NTLM pass-the-hash backend: one WS-Man Get authenticated
+    with the typed hash credential.
+
+    Identical semantics to the password path (same envelope, TLS always
+    verified on HTTPS, message encryption on HTTP via
+    ``winrm.encryption.Encryption``) except the auth handler is
+    ``HttpNtlmAuth(<spnego.NTLMHash>, password=None)`` — the hash is the
+    username credential, never a password (source-audited:
+    requests_ntlm forwards the credential object to spnego.client, and
+    spnego structurally excludes SSPI for NTLMHash credentials).
+    Raises WinRMBackendUnavailable only when the optional extra is
+    missing.
+    """
+    import requests as _requests
+
+    try:
+        from requests_ntlm import HttpNtlmAuth
+        from winrm.encryption import Encryption
+        from winrm.exceptions import (
+            AuthenticationError,
+            InvalidCredentialsError,
+            WinRMError,
+            WinRMTransportError,
+        )
+    except ImportError as exc:
+        raise WinRMBackendUnavailable(
+            "the WinRM backend is unavailable: install the optional 'winrm' "
+            "extra (pip install 'pivotcheck[winrm]')"
+        ) from exc
+
+    hash_credential: Any = _winrm_hash_credential(credential)
+    endpoint = f"{scheme}://{target}:{port}/wsman"
+    session = _requests.Session()
+    # password is deliberately None: the hash is NEVER a password
+    session.auth = HttpNtlmAuth(hash_credential, None, send_cbt=True)
+    session.verify = True  # HTTPS certificates always verified
+    session.headers.update(
+        {
+            "Content-Type": "application/soap+xml;charset=UTF-8",
+            "User-Agent": "Python WinRM client",
+        }
+    )
+    message = _WSMan_GET_ENVELOPE.format(
+        to=f"{endpoint}",
+        message_id=f"urn:uuid:pivotcheck-{time.perf_counter_ns()}",
+        operation_timeout=int(timeout),
+    )
+    encrypted = scheme == "http"  # message_encryption="auto" semantics
+    try:
+        if encrypted:
+            # Initialize the NTLM security context with an empty POST so
+            # Encryption has session_security available (mirrors pywinrm
+            # Transport.setup_encryption for auth_method="ntlm").
+            request = _requests.Request("POST", endpoint, data=None)
+            session.send(session.prepare_request(request), timeout=timeout)
+            encryption = Encryption(session, "ntlm")
+            prepared = encryption.prepare_encrypted_request(session, endpoint, message.encode("utf-8"))
+            response = session.send(prepared, timeout=timeout)
+        else:
+            request = _requests.Request("POST", endpoint, data=message.encode("utf-8"))
+            response = session.send(session.prepare_request(request), timeout=timeout)
+        if response.status_code >= 400:
+            return _hash_http_error(response, credential)
+        # A completed exchange answered with HTTP 200 is the validation
+        # signal (same semantics as the certified password path).
+        return (_BackendOutcome.AUTH, "")
+    except InvalidCredentialsError as exc:
+        return (_BackendOutcome.AUTH_FAILED, _normalize_detail(exc, credential.secret))
+    except AuthenticationError as exc:
+        return (_BackendOutcome.AUTH_FAILED, _normalize_detail(exc, credential.secret))
+    except WinRMTransportError as exc:
+        detail = _normalize_detail(exc, credential.secret)
+        code = exc.code if exc.args and len(exc.args) > 1 else None
+        if code == 401:
+            return (_BackendOutcome.AUTH_FAILED, detail)
+        if "certificate" in detail.lower() or "ssl" in detail.lower():
+            return (_BackendOutcome.TLS, detail)
+        return (_BackendOutcome.TRANSPORT, detail)
+    except WinRMError as exc:
+        detail = _normalize_detail(exc, credential.secret)
+        status = _classify_detail(detail)
+        if status is WinRMCheckStatus.PROTOCOL_ERROR:
+            return (_BackendOutcome.PROTOCOL, detail)
+        if status is WinRMCheckStatus.AUTH_FAILED:
+            return (_BackendOutcome.AUTH_FAILED, detail)
+        return (_BackendOutcome.TRANSPORT, detail)
+    except _requests.exceptions.HTTPError as exc:
+        detail = _normalize_detail(exc, credential.secret)
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+        if code == 401:
+            return (_BackendOutcome.AUTH_FAILED, detail)
+        return (_BackendOutcome.TRANSPORT, detail)
+    except _requests.exceptions.Timeout as exc:
+        return (_BackendOutcome.TIMEOUT, _normalize_detail(exc, credential.secret))
+    except _requests.exceptions.ConnectionError as exc:
+        detail = _normalize_detail(exc, credential.secret)
+        lowered = detail.lower()
+        if _first(lowered, _DNS_MARKERS):
+            return (_BackendOutcome.DNS, detail)
+        return (_BackendOutcome.TRANSPORT, detail)
+    except OSError as exc:
+        detail = _normalize_detail(exc, credential.secret)
+        lowered = detail.lower()
+        if "timed out" in lowered:
+            return (_BackendOutcome.TIMEOUT, detail)
+        if _first(lowered, _DNS_MARKERS):
+            return (_BackendOutcome.DNS, detail)
+        return (_BackendOutcome.TRANSPORT, detail)
+    finally:
+        session.close()
+        LOG.debug("winrm hash validation finished for %s:%s", target, port)
+
+
+def _hash_http_error(response: object, credential: Credential) -> tuple[str, str]:
+    """Map a >=400 HTTP response on the hash path to the shared taxonomy."""
+    status_code = getattr(response, "status_code", None)
+    text = ""
+    try:
+        text = str(getattr(response, "text", "") or "")
+    except Exception:  # noqa: BLE001 - defensive; response body unreadable
+        text = ""
+    detail = _normalize_detail(text, credential.secret)
+    if status_code == 401:
+        return (_BackendOutcome.AUTH_FAILED, detail)
+    lowered = detail.lower()
+    if status_code == 500 and ("soap" in lowered or "wsman" in lowered or "fault" in lowered):
+        return (_BackendOutcome.PROTOCOL, detail)
+    if "certificate" in lowered or "ssl" in lowered:
+        return (_BackendOutcome.TLS, detail)
+    return (_BackendOutcome.TRANSPORT, detail)
+
+
+# ---------------------------------------------------------------------------
+# Kerberos ticket backend (G-02, Stage 48; imported lazily)
+# ---------------------------------------------------------------------------
+
+
+def _winrm_ticket_credential(credential: Credential) -> Any:
+    """Translate the KERBEROS_TICKET credential into the backend's typed
+    ccache credential primitive (G-02).
+
+    The secret is the ccache reference (e.g., 'FILE:/path/to/cache').
+    The username is the optional principal for exact-match pinning.
+    The domain is the Kerberos realm.
+
+    The credential is NEVER converted into a password, never stored,
+    never serialized, and never falls back to another auth mechanism.
+    """
+    try:
+        from spnego import KerberosCCache
+    except ImportError as exc:
+        raise WinRMBackendUnavailable(
+            "the WinRM Kerberos backend is unavailable: install the optional "
+            "'kerberos' extra (pip install 'pivotcheck[kerberos]')"
+        ) from exc
+    return KerberosCCache(ccache=credential.secret, principal=credential.username)
+
+
+def _ticket_default_backend(
+    target: str,
+    port: int,
+    credential: Credential,
+    timeout: float,
+    scheme: str,
+) -> tuple[str, str]:
+    """Run the Kerberos ticket backend: one WS-Man Get authenticated
+    with the typed Kerberos ccache credential.
+
+    Identical semantics to the password/hash paths (same envelope, TLS always
+    verified on HTTPS, message encryption on HTTP via
+    ``winrm.encryption.Encryption``) except the auth handler uses the
+    spnego GSSAPIProxy context with the explicit ccache.
+    Raises WinRMBackendUnavailable only when the optional extra is missing.
+    """
+    import requests as _requests
+
+    try:
+        import spnego
+    except ImportError as exc:
+        raise WinRMBackendUnavailable(
+            "the WinRM Kerberos backend is unavailable: install the optional "
+            "'kerberos' extra (pip install 'pivotcheck[kerberos]')"
+        ) from exc
+
+    ticket_credential: Any = _winrm_ticket_credential(credential)
+    endpoint = f"{scheme}://{target}:{port}/wsman"
+    session = _requests.Session()
+
+    # Use spnego's GSSAPI client context for Kerberos authentication
+    # The spnego.client() with KerberosCCache and protocol="kerberos"
+    # routes exclusively to GSSAPIProxy (no NTLM/SSPI fallback).
+    # We use the lower-level context directly for the WS-Man exchange.
+    client_ctx = spnego.client(
+        ticket_credential,
+        hostname=target,
+        service="HTTP",
+        protocol="kerberos",
+    )
+
+    session.verify = True  # HTTPS certificates always verified
+    session.headers.update(
+        {
+            "Content-Type": "application/soap+xml;charset=UTF-8",
+            "User-Agent": "Python WinRM client",
+        }
+    )
+
+    message = _WSMan_GET_ENVELOPE.format(
+        to=f"{endpoint}",
+        message_id=f"urn:uuid:pivotcheck-{time.perf_counter_ns()}",
+        operation_timeout=int(timeout),
+    )
+
+    # Perform the Kerberos authentication exchange
+    # Step 1: Client generates AP-REQ
+    client_token = client_ctx.step()
+
+    # Prepare the request with the Kerberos token
+    request = _requests.Request(
+        "POST", endpoint, data=message.encode("utf-8"),
+        headers={"Authorization": f"Negotiate {base64.b64encode(client_token).decode('ascii')}"}
+    )
+    prepared = session.prepare_request(request)
+
+    try:
+        response = session.send(prepared, timeout=timeout)
+
+        # If we get a 401 with WWW-Authenticate: Negotiate, continue the exchange
+        if response.status_code == 401:
+            www_auth = response.headers.get("WWW-Authenticate", "")
+            if "Negotiate" in www_auth:
+                # Extract the server token
+                server_token_b64 = www_auth.split("Negotiate")[-1].strip()
+                server_token = base64.b64decode(server_token_b64)
+                # Step 2: Client processes server token
+                client_ctx.step(server_token)
+                if client_ctx.complete:
+                    # Re-send with mutual auth if needed
+                    request = _requests.Request("POST", endpoint, data=message.encode("utf-8"))
+                    response = session.send(session.prepare_request(request), timeout=timeout)
+
+        if response.status_code >= 400:
+            return _ticket_http_error(response, credential)
+
+        # A completed exchange answered with HTTP 200 is the validation signal
+        return (_BackendOutcome.AUTH, "")
+
+    except _requests.exceptions.HTTPError as exc:
+        detail = _normalize_detail(exc, credential.secret)
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+        if code == 401:
+            return (_BackendOutcome.AUTH_FAILED, detail)
+        return (_BackendOutcome.TRANSPORT, detail)
+    except _requests.exceptions.Timeout as exc:
+        return (_BackendOutcome.TIMEOUT, _normalize_detail(exc, credential.secret))
+    except _requests.exceptions.ConnectionError as exc:
+        detail = _normalize_detail(exc, credential.secret)
+        lowered = detail.lower()
+        if _first(lowered, _DNS_MARKERS):
+            return (_BackendOutcome.DNS, detail)
+        return (_BackendOutcome.TRANSPORT, detail)
+    except OSError as exc:
+        detail = _normalize_detail(exc, credential.secret)
+        lowered = detail.lower()
+        if "timed out" in lowered:
+            return (_BackendOutcome.TIMEOUT, detail)
+        if _first(lowered, _DNS_MARKERS):
+            return (_BackendOutcome.DNS, detail)
+        return (_BackendOutcome.TRANSPORT, detail)
+    finally:
+        session.close()
+        LOG.debug("winrm ticket validation finished for %s:%s", target, port)
+
+
+def _ticket_http_error(response: object, credential: Credential) -> tuple[str, str]:
+    """Map a >=400 HTTP response on the ticket path to the shared taxonomy."""
+    status_code = getattr(response, "status_code", None)
+    text = ""
+    try:
+        text = str(getattr(response, "text", "") or "")
+    except Exception:  # noqa: BLE001 - defensive; response body unreadable
+        text = ""
+    detail = _normalize_detail(text, credential.secret)
+    if status_code == 401:
+        return (_BackendOutcome.AUTH_FAILED, detail)
+    lowered = detail.lower()
+    if status_code == 500 and ("soap" in lowered or "wsman" in lowered or "fault" in lowered):
+        return (_BackendOutcome.PROTOCOL, detail)
+    if "certificate" in lowered or "ssl" in lowered:
+        return (_BackendOutcome.TLS, detail)
+    return (_BackendOutcome.TRANSPORT, detail)
+
+
+# ---------------------------------------------------------------------------
 # Validator
 # ---------------------------------------------------------------------------
 
@@ -279,15 +629,28 @@ def validate_winrm_auth(
     the port convention: 5986 = https). Never silently downgraded.
 
     ``backend`` is injectable for deterministic tests; production uses
-    :func:`_default_backend` (pywinrm, optional extra).
+    :func:`_default_backend` (pywinrm, optional extra) for PASSWORD
+    credentials, :func:`_hash_default_backend` (requests_ntlm with the
+    typed spnego hash credential) for NTLM_HASH credentials, and
+    :func:`_ticket_default_backend` (spnego GSSAPIProxy with explicit
+    ccache) for KERBEROS_TICKET credentials.
     """
     if credential.credential_type is CredentialType.PASSWORD:
-        pass  # supported: NTLM auth via pywinrm
+        default_backend: Callable[..., tuple[str, str]] = _default_backend
     elif credential.credential_type is CredentialType.NTLM_HASH:
-        return _unsupported(credential, target, port, (
-            "NTLM hash pass-the-hash is not supported by the current WinRM "
-            "backend; supply a PASSWORD credential instead"
-        ))
+        if not credential.username:
+            return _unsupported(credential, target, port, (
+                "NTLM hash pass-the-hash requires a username (--winrm-user): "
+                "a hash authenticates an account, it does not identify one"
+            ))
+        default_backend = _hash_default_backend
+    elif credential.credential_type is CredentialType.KERBEROS_TICKET:
+        if not credential.username:
+            return _unsupported(credential, target, port, (
+                "Kerberos ticket validation requires a username (--winrm-user): "
+                "a ticket authenticates an account, it does not identify one"
+            ))
+        default_backend = _ticket_default_backend
     else:
         return _unsupported(credential, target, port, (
             f"{credential.credential_type.value} credentials are not supported "
@@ -310,7 +673,7 @@ def validate_winrm_auth(
         scheme = transport_scheme
     else:
         scheme = transport_scheme_for_port(port)
-    run_backend = backend or _default_backend
+    run_backend = backend or default_backend
     start = time.perf_counter()
 
     try:
@@ -368,6 +731,7 @@ def _finish(
         port=port,
         username=credential.username or "",
         transport_scheme=scheme,
+        credential_type=credential.credential_type.value,
         status=status,
         verdict=verdict_for(status),
         detail=detail,
@@ -382,6 +746,7 @@ def _unsupported(credential: Credential, target: str, port: int, reason: str) ->
         target=target,
         port=port,
         username=credential.username or "",
+        credential_type=credential.credential_type.value,
         status=status,
         verdict=verdict_for(status),
         detail=reason,
@@ -396,6 +761,7 @@ def _invalid_target(credential: Credential, target: str, port: int, reason: str)
         target=target,
         port=port,
         username=credential.username or "",
+        credential_type=credential.credential_type.value,
         status=status,
         verdict=verdict_for(status),
         detail=reason,

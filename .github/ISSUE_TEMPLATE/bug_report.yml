@@ -1,0 +1,166 @@
+name: Bug Report
+description: Report a reproducible bug in PivotCheck 1.0.0
+title: "[BUG] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. Please provide enough information for us to reproduce the issue without requesting secrets.
+
+  - type: input
+    id: version
+    attributes:
+      label: PivotCheck Version
+      description: Output of `pivotcheck --version`
+      placeholder: "pivotcheck 1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / Platform
+      description: e.g., Ubuntu 24.04, Windows 11, macOS 14, Debian 12
+      placeholder: "Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python Version
+      description: Output of `python --version`
+      placeholder: "Python 3.12.4"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: Install Method
+      options:
+        - "pip install pivotcheck"
+        - "pip install pivotcheck[smb]"
+        - "pip install pivotcheck[winrm]"
+        - "pip install pivotcheck[socks]"
+        - "pipx install pivotcheck"
+        - "Other (specify in description)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command Used
+      description: Full command line (redact credential env var values if needed)
+      placeholder: "pivotcheck check 10.10.20.25 --port 445 --json"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Result
+      description: What did you anticipate would happen?
+      placeholder: "Expected SUCCESS with exit code 0 and JSON output showing AUTHENTICATED"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Result
+      description: What actually happened? Include stdout, stderr, and exit code.
+      placeholder: "Got exit code 3, stderr: [-] DNS_ERROR: ..."
+    validations:
+      required: true
+
+  - type: input
+    id: exit_code
+    attributes:
+      label: Exit Code
+      description: Numeric exit code
+      placeholder: "3"
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant Output
+      description: JSON or text output (redact IPs/hostnames if sensitive)
+      placeholder: |
+        {
+          "schema_version": "1.1",
+          "tool": "pivotcheck",
+          "version": "1.0.0",
+          "command": "check",
+          "status": "DNS_ERROR",
+          ...
+        }
+    validations:
+      required: false
+
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Traceback (if any)
+      description: Full traceback if an exception occurred (redact secrets)
+      placeholder: |
+        Traceback (most recent call last):
+          File "...", line ..., in ...
+            ...
+    validations:
+      required: false
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: Reproduction Frequency
+      options:
+        - "Always"
+        - "Intermittent"
+        - "Once"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Execution Environment
+      options:
+        - "Local host"
+        - "Remote SSH"
+        - "Container (Docker/Podman)"
+        - "VM"
+        - "CI/CD pipeline"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted Discovery/Validation Evidence (optional)
+      description: Relevant subset of discovery/validation JSON with sensitive fields removed
+      placeholder: |
+        {
+          "networks": [...],
+          "routes": [...]
+        }
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: secret_safety
+    attributes:
+      label: Secret Safety Confirmation
+      description: Confirm no secrets are included in this report
+      options:
+        - label: "No passwords, private keys, NTLM hashes, Kerberos tickets, API keys, or tokens included"
+          required: true
+        - label: "All IPs/hostnames redacted or confirmed non-sensitive"
+          required: true
+        - label: "Credential environment variable names only (not values) used in command"
+          required: true

@@ -244,6 +244,101 @@ _KNOWLEDGE: dict[tuple[OpsecAction, OpsecPlatform], tuple[OpsecObservation, ...]
             sources=("Microsoft-Windows-Security-Auditing",),
         ),
     ),
+    # --- HTTP request (G-16): one explicit HEAD request, no credentials ---
+    (OpsecAction.HTTP_REQUEST, OpsecPlatform.WINDOWS): (
+        OpsecObservation(
+            category=OpsecCategory.NETWORK_CONNECTION,
+            description=(
+                "Windows Filtering Platform may record the outbound "
+                "connection (5156) when connection auditing is enabled"
+            ),
+            likelihood=OpsecLikelihood.POSSIBLE,
+            event_ids=("5156",),
+            sources=("Microsoft-Windows-Security-Auditing",),
+        ),
+        OpsecObservation(
+            category=OpsecCategory.NETWORK_CONNECTION,
+            description=(
+                "plain HTTP carries the request line and headers in "
+                "cleartext on the wire, so any observer on the network "
+                "path can read them; this is a documented property of "
+                "unencrypted HTTP, not an environment-dependent log event"
+            ),
+            likelihood=OpsecLikelihood.DOCUMENTED,
+        ),
+        OpsecObservation(
+            category=OpsecCategory.AUTHENTICATION,
+            description=(
+                "the validation sends one HEAD request with no "
+                "credentials and performs no authentication: no logon "
+                "telemetry is expected from the request itself"
+            ),
+            likelihood=OpsecLikelihood.NOT_EXPECTED,
+            event_ids=("4624", "4625"),
+            sources=("Microsoft-Windows-Security-Auditing",),
+        ),
+        OpsecObservation(
+            category=OpsecCategory.SESSION_ACTIVITY,
+            description=(
+                "the validation closes the connection after the response "
+                "headers: no application session, no crawling, and no "
+                "content download, so application session telemetry is "
+                "not expected from the validation itself"
+            ),
+            likelihood=OpsecLikelihood.NOT_EXPECTED,
+        ),
+    ),
+    (OpsecAction.HTTP_REQUEST, OpsecPlatform.LINUX): (
+        OpsecObservation(
+            category=OpsecCategory.NETWORK_CONNECTION,
+            description=(
+                "Linux distributions do not log outbound HTTP connections "
+                "by default; netfilter/audit logging appears only where "
+                "explicitly configured"
+            ),
+            likelihood=OpsecLikelihood.ENVIRONMENT_DEPENDENT,
+            sources=("auditd",),
+        ),
+        OpsecObservation(
+            category=OpsecCategory.NETWORK_CONNECTION,
+            description=(
+                "plain HTTP carries the request line and headers in "
+                "cleartext on the wire, so any observer on the network "
+                "path can read them; this is a documented property of "
+                "unencrypted HTTP, not an environment-dependent log event"
+            ),
+            likelihood=OpsecLikelihood.DOCUMENTED,
+        ),
+        OpsecObservation(
+            category=OpsecCategory.AUTHENTICATION,
+            description=(
+                "the validation sends one HEAD request with no "
+                "credentials and performs no authentication: no logon "
+                "telemetry is expected from the request itself"
+            ),
+            likelihood=OpsecLikelihood.NOT_EXPECTED,
+        ),
+    ),
+    (OpsecAction.HTTP_REQUEST, OpsecPlatform.MACOS): (
+        OpsecObservation(
+            category=OpsecCategory.NETWORK_CONNECTION,
+            description=(
+                "macOS does not log outbound HTTP connections by default; "
+                "firewall logging appears only where explicitly enabled"
+            ),
+            likelihood=OpsecLikelihood.ENVIRONMENT_DEPENDENT,
+        ),
+        OpsecObservation(
+            category=OpsecCategory.NETWORK_CONNECTION,
+            description=(
+                "plain HTTP carries the request line and headers in "
+                "cleartext on the wire, so any observer on the network "
+                "path can read them; this is a documented property of "
+                "unencrypted HTTP, not an environment-dependent log event"
+            ),
+            likelihood=OpsecLikelihood.DOCUMENTED,
+        ),
+    ),
 }
 
 _RATIONALE: dict[OpsecAction, str] = {
@@ -269,6 +364,15 @@ _RATIONALE: dict[OpsecAction, str] = {
         "A SOCKS5 CONNECT is observable at the proxy (application layer) and "
         "on the network path; the proxy's own logging is outside PivotCheck's "
         "knowledge."
+    ),
+    OpsecAction.HTTP_REQUEST: (
+        "A single HTTP HEAD request without credentials is a network event "
+        "whose request line and headers are visible on the wire in plain "
+        "HTTP; it performs no authentication, so no logon telemetry is "
+        "expected. HTTPS is not a stealthier variant: it changes WHICH "
+        "bytes are readable on the path (contents encrypted, TLS "
+        "handshake and destination still visible) and is described by the "
+        "https-request action, not by silence."
     ),
 }
 

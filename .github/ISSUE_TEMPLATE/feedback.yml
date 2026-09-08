@@ -1,0 +1,112 @@
+name: Usability / Documentation / Compatibility Feedback
+description: Report a usability issue, documentation gap, or compatibility observation
+title: "[FEEDBACK] "
+labels: ["feedback", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for sharing your experience with PivotCheck. This template is for:
+
+        - Usability friction (confusing CLI, unclear output, unexpected behavior)
+        - Documentation gaps (missing examples, unclear concepts, incorrect docs)
+        - Compatibility observations (works on X, fails on Y, version conflicts)
+        - False positive / false negative reports
+        - Semantic confusion (evidence vs inference, timeout interpretation, etc.)
+
+  - type: input
+    id: version
+    attributes:
+      label: PivotCheck Version
+      description: Output of `pivotcheck --version`
+      placeholder: "pivotcheck 1.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / Platform
+      description: e.g., Ubuntu 24.04, Windows 11, macOS 14, Debian 12
+      placeholder: "Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python Version
+      description: Output of `python --version`
+      placeholder: "Python 3.12.4"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Feedback Category
+      options:
+        - "Usability — CLI confusing, output unclear, workflow friction"
+        - "Documentation — missing, unclear, incorrect, or incomplete"
+        - "Compatibility — works on X, fails on Y, dependency conflict"
+        - "False Positive — PivotCheck reported X but reality is Y"
+        - "False Negative — PivotCheck missed X that exists"
+        - "Semantic Confusion — unclear what evidence/inference/validation means"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What did you observe? What did you expect? Where is the gap?
+      placeholder: |
+        When running `pivotcheck explain 10.50.0.0/16`, the output says "CURRENT_EVIDENCE" 
+        but the network wasn't in my discovery snapshot. The classification seems wrong...
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command Used (if applicable)
+      description: Full command line that produced the observation
+      placeholder: "pivotcheck explain 10.50.0.0/16 --json"
+    validations:
+      required: false
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant Output (if applicable)
+      description: JSON or text output that illustrates the issue
+      placeholder: |
+        {
+          "classification": "CURRENT_EVIDENCE",
+          ...
+        }
+    validations:
+      required: false
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested Improvement
+      description: What would make this clearer/better? (Optional)
+      placeholder: |
+        The docs could clarify that "CURRENT_EVIDENCE" means the network was in the 
+        current discovery snapshot, not that it's currently reachable...
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: secret_safety
+    attributes:
+      label: Secret Safety Confirmation
+      description: Confirm no secrets are included in this report
+      options:
+        - label: "No passwords, private keys, NTLM hashes, Kerberos tickets, API keys, or tokens included"
+          required: true
+        - label: "All IPs/hostnames redacted or confirmed non-sensitive"
+          required: true

@@ -108,6 +108,7 @@ class WinRMCheckResult:
     username: str
     protocol: str = "winrm"
     transport_scheme: str = "http"
+    credential_type: str = "password"  # password, ntlm_hash, kerberos_ticket
     status: WinRMCheckStatus = WinRMCheckStatus.LOCAL_ERROR
     verdict: WinRMVerdict = WinRMVerdict.VALIDATION_NOT_PERFORMED
     detail: str | None = None  # redacted; never credential material
@@ -121,6 +122,7 @@ class WinRMCheckResult:
             "username": self.username,
             "protocol": self.protocol,
             "transport_scheme": self.transport_scheme,
+            "credential_type": self.credential_type,
             "status": self.status.value,
             "verdict": self.verdict.value,
             "limitations": list(limitations_for(self.status)),

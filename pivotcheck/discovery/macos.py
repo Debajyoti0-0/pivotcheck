@@ -1,7 +1,7 @@
 """macOS discovery collector.
 
 Collects interfaces, routes, neighbors, DNS configuration, and sockets on
-macOS using standard tools (`ifconfig`, `netstat -rn`, `arp -a`,
+macOS using standard tools (`ifconfig`, `netstat -rn`, `arp -a`, `ndp -an`,
 `scutil --dns`, `netstat -an`) and normalizes them into the same evidence
 models used by the Linux and Windows collectors.
 
@@ -12,6 +12,12 @@ an injectable command runner so tests run without touching a live system.
 macOS `netstat -an` does not report owning PIDs without elevated helpers,
 so socket/process correlation is not collected by this collector; that
 remains explicit, documented behavior rather than a silent omission.
+
+IPv6 neighbors (G-11): `ndp -an` output is parsed into the same Neighbor
+model. The parser accepts IPv6 neighbors only — IPv4 records in ndp output
+are rejected, and family isolation is enforced at this seam. Neighbor
+presence is LOCAL OBSERVATION evidence only: it never implies
+reachability, forwarding, or validation.
 """
 
 from __future__ import annotations
@@ -321,6 +327,91 @@ def parse_netstat_an(output: str) -> tuple[Connection, ...]:
 
 
 # --------------------------------------------------------------------------
+# ndp -an (IPv6 neighbor table; G-11)
+# --------------------------------------------------------------------------
+
+# `ndp -an` rows: "Neighbor      Linklayer Address  Netif Expire  St Flts"
+# e.g. "fe80::1%en0            a4:2b:b0:1:2:3     en0  23s     R"
+# or permanent entries without an expire column. States are macOS-specific
+# tokens (R, STALE, PERMANENT); unmapped tokens are preserved verbatim.
+_NDP_ENTRY_RE = re.compile(
+    r"^(?P<ip>[0-9A-Fa-f:]+)(?:%(?P<zone>[a-z0-9]+))?\s+"
+    r"(?P<mac>(?:[0-9a-fA-F]{1,2}:){5}[0-9a-fA-F]{1,2}|\(incomplete\)|<default>)\s+"
+    r"(?P<if>[a-z0-9]+)(?:\s+(?P<rest>.*))?$"
+)
+
+
+def parse_ndp_an(output: str) -> tuple[Neighbor, ...]:
+    """Parse `ndp -an` output into IPv6 neighbors.
+
+    Contract:
+    - IPv6 neighbors only: rows whose address is not a valid IPv6 literal
+      are rejected (IPv4 records never enter the IPv6 evidence channel).
+    - Zone identifiers (%en0) are stripped; the interface column carries
+      the interface name.
+    - (incomplete) rows are preserved with mac_address=None and state
+      INCOMPLETE (negative cache entries, not negative evidence about a
+      host).
+    - Malformed rows, headers, and noise are skipped silently — an ndp
+      entry is observational; unparseable text carries no evidence.
+    - Duplicates are dropped (first occurrence wins) and the result is
+      ordered by (ip, interface) for determinism.
+    """
+    neighbors: list[Neighbor] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line or line.lower().startswith("neighbor"):
+            continue
+        match = _NDP_ENTRY_RE.match(line)
+        if not match:
+            continue
+        ip_raw = match.group("ip")
+        try:
+            ip = ipaddress.ip_address(ip_raw)
+        except ValueError:
+            continue
+        if ip.version != 6:
+            continue  # IPv4 records never enter the IPv6 evidence channel
+        mac_raw = match.group("mac").lower()
+        if mac_raw == "(incomplete)":
+            mac, state = None, "INCOMPLETE"
+        elif mac_raw == "<default>":
+            mac, state = None, None  # router entry: no link-layer address
+        else:
+            mac = _normalize_mac(mac_raw)
+            if mac is None:
+                continue
+            state = None
+        rest = match.group("rest") or ""
+        if state is None:
+            # State flag: the first purely-alphabetic token in the
+            # trailing columns (expire values like "23s" carry digits).
+            # Single-letter router states (R) are valid macOS tokens.
+            for token in rest.split():
+                if token.isalpha():
+                    state = token.upper()
+                    break
+        key = (str(ip), match.group("if"))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            neighbors.append(
+                Neighbor(
+                    ip_address=str(ip),
+                    interface=match.group("if"),
+                    mac_address=mac,
+                    state=state,
+                )
+            )
+        except ValueError:
+            continue
+    neighbors.sort(key=lambda n: (n.ip_address, n.interface))
+    return tuple(neighbors)
+
+
+# --------------------------------------------------------------------------
 # Collector
 # --------------------------------------------------------------------------
 
@@ -351,7 +442,28 @@ class MacOSCollector:
         return parse_netstat_rn(self._run("netstat", "-rn"))
 
     def collect_neighbors(self) -> tuple[Neighbor, ...]:
-        return parse_arp_a(self._run("arp", "-a"))
+        """IPv4 neighbors from `arp -a` merged with IPv6 neighbors from
+        `ndp -an` (G-11).
+
+        Both channels degrade independently: an ndp failure can never
+        remove IPv4 ARP evidence. Exactly one invocation per command; no
+        target arguments, no retries, no follow-up network operations.
+        """
+        neighbors = list(parse_arp_a(self._run("arp", "-a")))
+        try:
+            neighbors.extend(parse_ndp_an(self._run("ndp", "-an")))
+        except RuntimeError as exc:
+            # ndp unavailability (older macOS, restricted environment) is
+            # a collection limitation, not evidence of absence.
+            import logging
+
+            logging.getLogger(__name__).debug("ndp collection failed: %s", exc)
+        return tuple(neighbors)
+
+    def collect_ndp_neighbors(self) -> tuple[Neighbor, ...]:
+        """IPv6-only neighbor channel (G-11): consumed by LocalProvider as
+        an independent degradation channel alongside collect_neighbors."""
+        return parse_ndp_an(self._run("ndp", "-an"))
 
     def collect_dns(self) -> DNSConfig:
         return parse_scutil_dns(self._run("scutil", "--dns"))

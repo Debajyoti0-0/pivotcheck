@@ -64,9 +64,18 @@ def render_winrm_check(
 
     status_value = result.status.value
     status_text = c(_status_color(status_value), status_value)
+    
+    # Map credential_type to human-readable auth type
+    auth_type_map = {
+        "password": "NTLM WS-Man request (password)",
+        "ntlm_hash": "NTLM WS-Man request (pass-the-hash)",
+        "kerberos_ticket": "Kerberos WS-Man request (pass-the-ticket)",
+    }
+    auth_type = auth_type_map.get(result.credential_type, f"WS-Man request ({result.credential_type})")
+
     stream.write(f"\nTarget:    {result.target}:{result.port}\n")
     stream.write(f"Username:  {result.username}\n")
-    stream.write("Protocol:  winrm (NTLM WS-Man request, one attempt)\n")
+    stream.write(f"Protocol:  winrm ({auth_type}, one attempt)\n")
     stream.write(f"Transport: {result.transport_scheme}\n")
     stream.write(f"Timeout:   {report.timeout_s}s\n")
     stream.write(f"\nResult:    {status_text}")

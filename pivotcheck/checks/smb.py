@@ -28,9 +28,14 @@ Hard boundary (structural):
   exception strings are normalized and the secret value is stripped
   defensively.
 
-Known limitation (documented, not hidden): NTLM_HASH pass-the-hash is NOT
-supported by smbprotocol's public Session API; an NTLM_HASH credential is
-classified UNSUPPORTED_CREDENTIAL rather than faked.
+Known limitation (updated G-01, Stage 35): NTLM pass-the-hash IS supported
+through the backend's documented public credential primitive
+(``spnego.NTLMHash``), which ``smbprotocol.Session`` forwards credentials
+to (source-audited: Session.username flows verbatim into
+``spnego.client`` whose typed signature includes ``NTLMHash``). The
+translation is an explicit typed boundary: NTLM_HASH → NTLMHash — the
+hash is NEVER converted into a password. A hash without a username is
+rejected (a hash alone does not identify an account).
 """
 
 from __future__ import annotations
@@ -97,6 +102,41 @@ def _strip_secret(text: str, secret: str | None) -> str:
     return text
 
 
+def _ntlm_hash_credential(credential: Credential) -> object:
+    """Translate the NTLM_HASH credential into the backend's typed hash
+    primitive (G-01, Stage 35).
+
+    Explicit typed boundary: NTLM_HASH -> spnego.NTLMHash (the documented
+    public credential class accepted by ``spnego.client``, which
+    smbprotocol.Session forwards credentials to). The hash is NEVER
+    converted into a password, never stored, never serialized.
+
+    - 32-hex secret  -> nt_hash (LM omitted; modern NTLM ignores it)
+    - LM:NT secret   -> lm_hash + nt_hash
+    - Hex is normalized to uppercase (case-agnostic material).
+    - Username carries the optional domain in NTLM 'DOMAIN\\user' form.
+    """
+    try:
+        from spnego import NTLMHash
+    except ImportError as exc:
+        raise SmbBackendUnavailable(
+            "the NTLM hash backend is unavailable: install the optional "
+            "'smb' extra (pip install 'pivotcheck[smb]')"
+        ) from exc
+    secret = credential.secret
+    if ":" in secret:
+        lm_raw, _, nt_raw = secret.partition(":")
+        lm_hash: str | None = lm_raw.upper()
+        nt_hash: str = nt_raw.upper()
+    else:
+        lm_hash = None
+        nt_hash = secret.upper()
+    username = credential.username or ""
+    if credential.domain:
+        username = f"{credential.domain}\\{username}"
+    return NTLMHash(username=username, lm_hash=lm_hash, nt_hash=nt_hash)
+
+
 def _normalize_detail(text: object, secret: str | None) -> str:
     """Third-party exception text -> one redacted, single-line detail."""
     cleaned = " ".join(str(text).split())
@@ -136,19 +176,33 @@ def _default_backend(
     One connection, one session setup (auth_protocol forced to ntlm for
     determinism), one disconnect. Raises SmbBackendUnavailable only when
     the optional extra is missing.
+
+    Credential boundary (G-01): PASSWORD credentials supply the secret as
+    the password; NTLM_HASH credentials are translated into the backend's
+    typed hash primitive (spnego.NTLMHash) with password=None — the hash
+    is never masqueraded as a password (source-audited: Session forwards
+    its username verbatim to spnego.client, whose typed signature
+    includes NTLMHash).
     """
     try:
-        from smbprotocol.connection import Connection  # type: ignore[import-not-found]
-        from smbprotocol.exceptions import (  # type: ignore[import-not-found]
+        from smbprotocol.connection import Connection
+        from smbprotocol.exceptions import (
             SMBAuthenticationError,
             SMBException,
         )
-        from smbprotocol.session import Session  # type: ignore[import-not-found]
+        from smbprotocol.session import Session
     except ImportError as exc:
         raise SmbBackendUnavailable(
             "the SMB backend is unavailable: install the optional 'smb' extra "
             "(pip install 'pivotcheck[smb]')"
         ) from exc
+
+    if credential.credential_type is CredentialType.NTLM_HASH:
+        backend_username: object = _ntlm_hash_credential(credential)
+        backend_password: str | None = None
+    else:
+        backend_username = credential.username
+        backend_password = credential.secret
 
     import uuid
 
@@ -158,8 +212,8 @@ def _default_backend(
         connection.connect(timeout=int(timeout))
         session = Session(
             connection,
-            username=credential.username,
-            password=credential.secret,
+            username=backend_username,
+            password=backend_password,
             require_encryption=True,
             auth_protocol="ntlm",
         )
@@ -219,10 +273,16 @@ def validate_smb_auth(
     if credential.credential_type is CredentialType.PASSWORD:
         pass  # supported: NTLM session-setup auth via smbprotocol
     elif credential.credential_type is CredentialType.NTLM_HASH:
-        return _unsupported(credential, target, port, (
-            "NTLM hash pass-the-hash is not supported by the current SMB "
-            "backend; supply a PASSWORD credential instead"
-        ))
+        # Supported (G-01, Stage 35): pass-the-hash via the backend's
+        # documented spnego.NTLMHash primitive. One hard requirement: a
+        # hash alone does not identify an account, so a username is
+        # mandatory. The hash is never masqueraded as a password.
+        if not credential.username:
+            return _unsupported(credential, target, port, (
+                "NTLM hash pass-the-hash requires a username: the hash "
+                "authenticates an account, it does not identify one "
+                "(supply --smb-user)"
+            ))
     else:
         return _unsupported(credential, target, port, (
             f"{credential.credential_type.value} credentials are not supported "

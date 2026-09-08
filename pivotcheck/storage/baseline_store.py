@@ -1,4 +1,17 @@
-"""Versioned JSON persistence for baseline evidence; no CLI or analysis logic."""
+"""Versioned JSON persistence for baseline evidence; no CLI or analysis logic.
+
+Storage modes (G-03, Stage 30):
+
+- PLAINTEXT (default, unchanged): ``NAME.json`` — schema-validated JSON.
+- ENCRYPTED (explicitly requested): ``NAME.enc.json`` — the same
+  serialized document inside the versioned encrypted container
+  (:mod:`pivotcheck.storage.baseline_crypto`).
+
+The two formats are structurally distinguishable and never silently
+converted. Loading transparently handles both; creation encrypts only
+when a password is explicitly supplied. Analysis always receives the
+same normalized Baseline regardless of storage mode.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +25,12 @@ from pathlib import Path
 from pivotcheck.models.baseline import Baseline, BaselineNetwork
 from pivotcheck.models.network import Confidence, NetworkOrigin, RouteType
 from pivotcheck.models.session import SessionIdentity
+from pivotcheck.storage.baseline_crypto import (
+    EncryptedBaselineError,
+    decrypt_baseline_document,
+    encrypt_baseline_document,
+    is_encrypted_file,
+)
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _SCHEMA_VERSION = 1
@@ -76,41 +95,66 @@ class BaselineStore:
         self.data_dir = Path(data_dir).expanduser() if data_dir else default_data_dir()
 
     def create(
-        self, name: str, baseline: Baseline, *, force: bool = False
+        self,
+        name: str,
+        baseline: Baseline,
+        *,
+        force: bool = False,
+        password: str | None = None,
     ) -> StoredBaseline:
+        """Persist a baseline; encrypts at rest only when a password is
+        explicitly supplied. Plaintext behavior is byte-identical to the
+        pre-encryption plaintext format when no password is given."""
         normalized = validate_baseline_name(name)
-        path = self._path(normalized)
+        path = self._path(normalized, encrypted=password is not None)
         self._ensure_directory()
         if path.exists() and not force:
             raise BaselineExistsError(f"baseline already exists: {normalized}")
         payload = {"name": normalized, **baseline.to_dict()}
-        self._atomic_write(path, payload)
+        if password is not None:
+            serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+            try:
+                container_json = encrypt_baseline_document(serialized, password)
+            except EncryptedBaselineError as exc:
+                raise BaselineSchemaError(f"baseline encryption failed: {exc}") from exc
+            self._atomic_write_text(path, container_json)
+        else:
+            self._atomic_write(path, payload)
         return StoredBaseline(normalized, baseline)
 
-    def load(self, name: str) -> StoredBaseline:
+    def load(self, name: str, password: str | None = None) -> StoredBaseline:
         normalized = validate_baseline_name(name)
-        path = self._path(normalized)
+        path = self._path(normalized, encrypted=False)
+        if not path.is_file():
+            path = self._path(normalized, encrypted=True)
         if not path.is_file():
             raise BaselineNotFoundError(f"baseline not found: {normalized}")
-        return self._parse_document(path, expected_name=normalized)
+        return self._parse_document(path, expected_name=normalized, password=password)
 
-    def list(self) -> tuple[StoredBaseline, ...]:
+    def list(self, password: str | None = None) -> tuple[StoredBaseline, ...]:
+        """Enumerate baselines. Encrypted entries require the password:
+        an encrypted store without a password fails closed with an
+        explicit error rather than silently omitting evidence."""
         if not self.data_dir.is_dir():
             return ()
         results = [
-            self._parse_document(path) for path in sorted(self.data_dir.glob("*.json"))
+            self._parse_document(path, password=password)
+            for path in sorted(self.data_dir.glob("*.json"))
         ]
         return tuple(sorted(results, key=lambda item: item.name))
 
     def delete(self, name: str) -> None:
         normalized = validate_baseline_name(name)
-        path = self._path(normalized)
+        path = self._path(normalized, encrypted=False)
+        if not path.is_file():
+            path = self._path(normalized, encrypted=True)
         if not path.is_file():
             raise BaselineNotFoundError(f"baseline not found: {normalized}")
         path.unlink()
 
-    def _path(self, normalized_name: str) -> Path:
-        return self.data_dir / f"{normalized_name}.json"
+    def _path(self, normalized_name: str, *, encrypted: bool) -> Path:
+        suffix = ".enc.json" if encrypted else ".json"
+        return self.data_dir / f"{normalized_name}{suffix}"
 
     def _ensure_directory(self) -> None:
         self.data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -139,8 +183,76 @@ class BaselineStore:
                 except OSError:
                     pass
 
+    def _atomic_write_text(self, path: Path, serialized: str) -> None:
+        """Atomic write for a pre-serialized payload (encrypted container).
+
+        No plaintext temporary artifact: the payload written here is
+        already the encrypted container.
+        """
+        temporary: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", dir=self.data_dir, delete=False
+            ) as handle:
+                temporary = handle.name
+                handle.write(serialized)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            temporary = None
+            try:
+                path.chmod(0o600)
+            except OSError:
+                pass  # platform permission models differ
+        finally:
+            if temporary:
+                try:
+                    Path(temporary).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
     def _parse_document(
-        self, path: Path, expected_name: str | None = None
+        self,
+        path: Path,
+        expected_name: str | None = None,
+        password: str | None = None,
+    ) -> StoredBaseline:
+        if is_encrypted_file(path):
+            return self._parse_encrypted(path, expected_name, password)
+        return self._parse_plaintext(path, expected_name)
+
+    def _parse_encrypted(
+        self, path: Path, expected_name: str | None, password: str | None
+    ) -> StoredBaseline:
+        """Parse an encrypted container: decrypt -> schema-validate ->
+        deserialize. Decryption success is NEVER treated as baseline
+        validity, and a missing password fails closed (never 'not
+        found', never 'empty')."""
+        if password is None:
+            raise BaselineSchemaError(
+                f"baseline '{path.name}' is encrypted; supply the password "
+                "to read it (fail-closed: no partial or plaintext fallback)"
+            )
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise BaselineSchemaError(
+                f"could not read baseline container: {path.name}"
+            ) from exc
+        try:
+            plaintext_json = decrypt_baseline_document(raw, password)
+        except EncryptedBaselineError as exc:
+            raise BaselineSchemaError(f"encrypted baseline unreadable: {exc}") from exc
+        try:
+            data = json.loads(plaintext_json)
+        except json.JSONDecodeError as exc:
+            raise BaselineSchemaError(
+                f"decrypted baseline is not valid JSON: {path.name}"
+            ) from exc
+        return self._deserialize_document(data, expected_name, path.name)
+
+    def _parse_plaintext(
+        self, path: Path, expected_name: str | None
     ) -> StoredBaseline:
         try:
             with path.open(encoding="utf-8") as handle:
@@ -149,6 +261,11 @@ class BaselineStore:
             raise BaselineSchemaError(f"invalid baseline JSON: {path.name}") from exc
         except OSError as exc:
             raise BaselineSchemaError(f"could not read baseline: {path.name}") from exc
+        return self._deserialize_document(data, expected_name, path.name)
+
+    def _deserialize_document(
+        self, data: object, expected_name: str | None, display_name: str
+    ) -> StoredBaseline:
         if not isinstance(data, dict):
             raise BaselineSchemaError("baseline document must be a JSON object")
         unexpected = set(data) - {

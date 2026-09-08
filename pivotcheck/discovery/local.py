@@ -120,6 +120,17 @@ class LocalProvider:
         neighbors: tuple[Neighbor, ...] = _safe_collect(
             "neighbors", collector.collect_neighbors, (), warnings
         )
+        # Optional IPv6 neighbor channel (G-11): only the macOS collector
+        # provides it. Degrades independently — an ndp failure can never
+        # remove IPv4 ARP evidence.
+        ndp_collector = getattr(collector, "collect_ndp_neighbors", None)
+        if ndp_collector is not None:
+            ndp_neighbors: tuple[Neighbor, ...] = _safe_collect(
+                "ndp-neighbors", ndp_collector, (), warnings
+            )
+            neighbors = neighbors + tuple(
+                n for n in ndp_neighbors if n not in neighbors
+            )
         dns = _safe_collect("dns", collector.collect_dns, None, warnings) or DNSConfig()
         connections: tuple[Connection, ...] = _safe_collect(
             "connections", collector.collect_connections, (), warnings
