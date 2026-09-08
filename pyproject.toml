@@ -8,14 +8,13 @@ dynamic = ["version"]
 description = "Passive network discovery and pivot path validation for authorized security assessments"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "GPL-3.0-only" }
+license = "GPL-3.0-only"
 authors = [{ name = "PivotCheck contributors" }]
 keywords = ["security", "pentest", "pivot", "network", "recon"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Information Technology",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
