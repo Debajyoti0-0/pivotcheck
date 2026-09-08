@@ -100,14 +100,14 @@ jobs:
           if len(wheels) != 1 or len(sdists) != 1:
               sys.exit(f"::error::Expected exactly one wheel and one sdist, got {wheels} + {sdists}")
           wheel, sdist = wheels[0], sdists[0]
-            if os.path.basename(wheel) != f"pivotcheck-{version}-py3-none-any.whl":
+          if os.path.basename(wheel) != f"pivotcheck-{version}-py3-none-any.whl":
               sys.exit(f"::error::Unexpected wheel filename: {wheel}")
-            if os.path.basename(sdist) != f"pivotcheck-{version}.tar.gz":
+          if os.path.basename(sdist) != f"pivotcheck-{version}.tar.gz":
               sys.exit(f"::error::Unexpected sdist filename: {sdist}")
 
           forbidden = ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-                   ".git/", ".github/", ".venv", "dist/", "build/", ".coverage",
-                   ".pytest_tmp")
+                       ".git/", ".github/", ".venv", "dist/", "build/", ".coverage",
+                       ".pytest_tmp")
           with zipfile.ZipFile(wheel) as z:
               names = z.namelist()
               hits = [n for n in names if any(p in n for p in forbidden)]
@@ -117,10 +117,10 @@ jobs:
                   sys.exit("::error::Wheel is missing the LICENSE file")
               if not any(n.startswith("pivotcheck/") for n in names):
                   sys.exit("::error::Wheel does not contain the pivotcheck package")
-                metadata = Parser().parsestr(
+              metadata = Parser().parsestr(
                   z.read(f"pivotcheck-{version}.dist-info/METADATA").decode()
-                )
-                if metadata["Name"] != "pivotcheck" or metadata["Version"] != version:
+              )
+              if metadata["Name"] != "pivotcheck" or metadata["Version"] != version:
                   sys.exit("::error::Wheel metadata has the wrong name or version")
               print(f"wheel audit OK: {len(names)} members")
 
@@ -131,15 +131,16 @@ jobs:
               hits = [n for n in names if any(p in n for p in forbidden)]
               if hits:
                   sys.exit(f"::error::Sdist contains forbidden paths: {hits[:5]}")
-                top = {
+              top = {
                   n.split("/", 1)[1].split("/", 1)[0]
                   for n in names
                   if "/" in n
-                }
+              }
               unexpected = top - allowed_top
               if unexpected:
                   sys.exit(f"::error::Sdist contains unexpected entries: {sorted(unexpected)}")
               print(f"sdist audit OK: top-level = {sorted(top)}")
+              EOF
 
       - name: Install wheel and verify release interface
         run: |
@@ -148,6 +149,17 @@ jobs:
           test "$(.release-venv/bin/pivotcheck --version)" = "pivotcheck ${{ steps.version.outputs.version }}"
           .release-venv/bin/pivotcheck --help > /dev/null
           .release-venv/bin/python -c "import pivotcheck; assert pivotcheck.__version__ == '${{ steps.version.outputs.version }}'"
+
+      - name: Create artifact integrity manifest
+        run: sha256sum dist/* > dist/release-manifest.txt
+
+      - name: Upload validated distributions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: validated-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
 
   pypi-publish:
     name: Publish to PyPI
@@ -166,7 +178,14 @@ jobs:
           name: validated-dist
           path: dist/
 
+      - name: Verify exact validated artifacts
+        run: |
+          test "$(find dist -maxdepth 1 -type f -name '*.whl' | wc -l)" = 1
+          test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" = 1
+          sha256sum --check dist/release-manifest.txt
+
       - name: Publish exact validated artifacts with Trusted Publishing
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1 (2026-08-30)
         with:
+          packages: dist/*.whl dist/*.tar.gz
           skip-existing: false
