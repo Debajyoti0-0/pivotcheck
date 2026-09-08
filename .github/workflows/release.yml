@@ -1,7 +1,7 @@
 name: Release
 
-# Production release pipeline. Triggered only by pushing an intentional
-# semantic-version tag.
+# Production release pipeline. Triggered only by pushing the authorized
+# v1.0.0 release tag.
 #
 # Pipeline: validate (tag/version integrity + full quality gates + build
 # once + artifact audit) -> pypi-publish (Trusted Publishing OIDC, no
@@ -13,7 +13,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ["v1.0.0"]
 
 permissions:
   contents: read
@@ -46,8 +46,8 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           TAG="$RELEASE_TAG"
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Tag '$TAG' does not match strict vX.Y.Z format"
+          if [ "$TAG" != "v1.0.0" ]; then
+            echo "::error::Only the authorized v1.0.0 tag may publish"
             exit 1
           fi
           VERSION="${TAG#v}"
@@ -77,7 +77,9 @@ jobs:
         run: mypy pivotcheck
 
       - name: Build distributions (once)
-        run: python -m build
+        run: |
+          rm -rf dist build pivotcheck.egg-info
+          python -m build
 
       - name: Validate distribution metadata
         run: python -m twine check dist/*
@@ -98,49 +100,49 @@ jobs:
           wheels = glob.glob("dist/*.whl")
           sdists = glob.glob("dist/*.tar.gz")
           if len(wheels) != 1 or len(sdists) != 1:
-              sys.exit(f"::error::Expected exactly one wheel and one sdist, got {wheels} + {sdists}")
+            sys.exit(f"::error::Expected exactly one wheel and one sdist, got {wheels} + {sdists}")
           wheel, sdist = wheels[0], sdists[0]
           if os.path.basename(wheel) != f"pivotcheck-{version}-py3-none-any.whl":
-              sys.exit(f"::error::Unexpected wheel filename: {wheel}")
+            sys.exit(f"::error::Unexpected wheel filename: {wheel}")
           if os.path.basename(sdist) != f"pivotcheck-{version}.tar.gz":
-              sys.exit(f"::error::Unexpected sdist filename: {sdist}")
+            sys.exit(f"::error::Unexpected sdist filename: {sdist}")
 
           forbidden = ("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
-                       ".git/", ".github/", ".venv", "dist/", "build/", ".coverage",
-                       ".pytest_tmp")
-          with zipfile.ZipFile(wheel) as z:
-              names = z.namelist()
-              hits = [n for n in names if any(p in n for p in forbidden)]
-              if hits:
-                  sys.exit(f"::error::Wheel contains forbidden paths: {hits[:5]}")
-              if f"pivotcheck-{version}.dist-info/licenses/LICENSE" not in names:
-                  sys.exit("::error::Wheel is missing the LICENSE file")
-              if not any(n.startswith("pivotcheck/") for n in names):
-                  sys.exit("::error::Wheel does not contain the pivotcheck package")
-              metadata = Parser().parsestr(
-                  z.read(f"pivotcheck-{version}.dist-info/METADATA").decode()
-              )
-              if metadata["Name"] != "pivotcheck" or metadata["Version"] != version:
-                  sys.exit("::error::Wheel metadata has the wrong name or version")
-              print(f"wheel audit OK: {len(names)} members")
+                 ".git/", ".github/", ".venv", "dist/", "build/", ".coverage",
+                 ".pytest_tmp")
+          with zipfile.ZipFile(wheel) as archive:
+            names = archive.namelist()
+            hits = [name for name in names if any(item in name for item in forbidden)]
+            if hits:
+              sys.exit(f"::error::Wheel contains forbidden paths: {hits[:5]}")
+            if f"pivotcheck-{version}.dist-info/licenses/LICENSE" not in names:
+              sys.exit("::error::Wheel is missing the LICENSE file")
+            if not any(name.startswith("pivotcheck/") for name in names):
+              sys.exit("::error::Wheel does not contain the pivotcheck package")
+            metadata = Parser().parsestr(
+              archive.read(f"pivotcheck-{version}.dist-info/METADATA").decode()
+            )
+            if metadata["Name"] != "pivotcheck" or metadata["Version"] != version:
+              sys.exit("::error::Wheel metadata has the wrong name or version")
+            print(f"wheel audit OK: {len(names)} members")
 
           allowed_top = {"LICENSE", "PKG-INFO", "README.md", "pyproject.toml",
-                         "setup.cfg", "pivotcheck", "pivotcheck.egg-info"}
+                 "setup.cfg", "pivotcheck", "pivotcheck.egg-info"}
           with tarfile.open(sdist) as archive:
-              names = archive.getnames()
-              hits = [n for n in names if any(p in n for p in forbidden)]
-              if hits:
-                  sys.exit(f"::error::Sdist contains forbidden paths: {hits[:5]}")
-              top = {
-                  n.split("/", 1)[1].split("/", 1)[0]
-                  for n in names
-                  if "/" in n
-              }
-              unexpected = top - allowed_top
-              if unexpected:
-                  sys.exit(f"::error::Sdist contains unexpected entries: {sorted(unexpected)}")
-              print(f"sdist audit OK: top-level = {sorted(top)}")
-              EOF
+            names = archive.getnames()
+            hits = [name for name in names if any(item in name for item in forbidden)]
+            if hits:
+              sys.exit(f"::error::Sdist contains forbidden paths: {hits[:5]}")
+            top = {
+              name.split("/", 1)[1].split("/", 1)[0]
+              for name in names
+              if "/" in name
+            }
+            unexpected = top - allowed_top
+            if unexpected:
+              sys.exit(f"::error::Sdist contains unexpected entries: {sorted(unexpected)}")
+            print(f"sdist audit OK: top-level = {sorted(top)}")
+          EOF
 
       - name: Install wheel and verify release interface
         run: |
