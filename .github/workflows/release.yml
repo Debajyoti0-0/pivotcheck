@@ -185,9 +185,12 @@ jobs:
           test "$(find dist -maxdepth 1 -type f -name '*.whl' | wc -l)" = 1
           test "$(find dist -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" = 1
           sha256sum --check dist/release-manifest.txt
+          # The publish action uploads everything in packages-dir; the
+          # manifest is audit-only and must not reach PyPI.
+          rm dist/release-manifest.txt
 
       - name: Publish exact validated artifacts with Trusted Publishing
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1 (2026-08-30)
         with:
-          packages: dist/*.whl dist/*.tar.gz
+          packages-dir: dist/
           skip-existing: false
