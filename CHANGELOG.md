@@ -2,7 +2,17 @@
 
 All notable changes to PivotCheck are documented in this file.
 
+## [1.0.1] — 2026-09-09
+
+### Changed
+
+- First published release. Shipped as 1.0.1 instead of 1.0.0 because the
+  1.0.0 distribution filenames were consumed on PyPI during a failed
+  release attempt and PyPI does not permit reuse of deleted filenames.
+
 ## [1.0.0] — 2026-09-09
+
+Tagged for release; never published (see 1.0.1).
 
 ### Added
 
