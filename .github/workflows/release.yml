@@ -1,7 +1,6 @@
 name: Release
 
-# Production release pipeline. Triggered only by pushing the authorized
-# v1.0.0 release tag.
+# Production release pipeline. Triggered by pushing a vX.Y.Z release tag.
 #
 # Pipeline: validate (tag/version integrity + full quality gates + build
 # once + artifact audit) -> pypi-publish (Trusted Publishing OIDC, no
@@ -13,7 +12,7 @@ name: Release
 
 on:
   push:
-    tags: ["v1.0.0"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 permissions:
   contents: read
@@ -46,8 +45,8 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           TAG="$RELEASE_TAG"
-          if [ "$TAG" != "v1.0.0" ]; then
-            echo "::error::Only the authorized v1.0.0 tag may publish"
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' is not a valid vX.Y.Z release tag"
             exit 1
           fi
           VERSION="${TAG#v}"
